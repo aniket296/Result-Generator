@@ -1,4 +1,4 @@
-﻿"""
+"""
 Dashboard view – Excel file loader and header inspector.
 
 Layout (when file loaded)
@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -38,6 +38,11 @@ from data_engine.exceptions import FileLockedError
 
 class DashboardView(QWidget):
     """Dashboard screen: load an Excel file and inspect its structure."""
+
+    # Emitted after a file is successfully loaded; carries the headers list.
+    # MainWindow connects this to TemplateEditorView.set_excel_headers().
+    excel_loaded = pyqtSignal(list)
+
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -405,6 +410,9 @@ class DashboardView(QWidget):
 
         self._empty_state.hide()
         self._loaded_state.show()
+
+        # Notify the rest of the app (MainWindow wires this to TemplateEditorView)
+        self.excel_loaded.emit(data["headers"])
 
     @staticmethod
     def _make_divider() -> QFrame:

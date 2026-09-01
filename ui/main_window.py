@@ -161,11 +161,21 @@ class MainWindow(QMainWindow):
         self._stack = QStackedWidget()
         self._stack.setStyleSheet(f"background-color: {CONTENT_BG};")
 
-        self._stack.addWidget(DashboardView())        # index 0
-        self._stack.addWidget(TemplateEditorView())   # index 1
-        self._stack.addWidget(SettingsView())         # index 2
+        self._dashboard_view       = DashboardView()
+        self._template_editor_view = TemplateEditorView()
+        self._settings_view        = SettingsView()
+
+        self._stack.addWidget(self._dashboard_view)        # index 0
+        self._stack.addWidget(self._template_editor_view)  # index 1
+        self._stack.addWidget(self._settings_view)         # index 2
+
+        # Forward Excel headers to the Template Editor automatically
+        self._dashboard_view.excel_loaded.connect(
+            self._template_editor_view.set_excel_headers
+        )
 
         return self._stack
+
 
     # ── Navigation ────────────────────────────────────────────────────────────
 
