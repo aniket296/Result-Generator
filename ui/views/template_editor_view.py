@@ -108,6 +108,7 @@ class TemplateEditorView(QWidget):
         self._selected_item: FieldItem | None = None
         self._excel_headers: list[str] = []
         self._initial_fit_done: bool = False
+        self._has_unsaved_changes: bool = False
 
         os.makedirs(_TEMPLATES_DIR, exist_ok=True)
         self._build_ui()
@@ -262,6 +263,17 @@ class TemplateEditorView(QWidget):
         """Returns the current template dictionary state."""
         return self._get_state()
 
+    def has_unsaved_changes(self) -> bool:
+        """Returns True if the template canvas has been modified since last save/load."""
+        return self._has_unsaved_changes
+
+    def _mark_dirty(self) -> None:
+        self._has_unsaved_changes = True
+
+    def save_template(self) -> bool:
+        """Triggers the Save Template dialog. Returns True if saved successfully."""
+        return self._on_save_template()
+
 
     # ------------------------------------------------------------------
     # Toolbar action slots
@@ -279,6 +291,7 @@ class TemplateEditorView(QWidget):
         pixmap, bg_type = self._load_as_pixmap(path)
         if pixmap:
             self._set_background(pixmap, bg_type, path)
+            self._mark_dirty()
 
     def _on_add_field(self) -> None:
         self._field_counter += 1
@@ -298,6 +311,7 @@ class TemplateEditorView(QWidget):
         self._register_field(item)
         self._scene.clearSelection()
         item.setSelected(True)
+        self._mark_dirty()
 
     def _on_delete_selected(self) -> None:
         to_remove = [i for i in self._scene.selectedItems() if isinstance(i, FieldItem)]
@@ -306,14 +320,15 @@ class TemplateEditorView(QWidget):
             if item in self._field_items:
                 self._field_items.remove(item)
         self._del_btn.setEnabled(False)
+        self._mark_dirty()
 
-    def _on_save_template(self) -> None:
+    def _on_save_template(self) -> bool:
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Template", _TEMPLATES_DIR,
             "Template Files (*.json);;All Files (*)"
         )
         if not path:
-            return
+            return False
         if not path.endswith(".json"):
             path += ".json"
         state = self._get_state()
@@ -322,8 +337,11 @@ class TemplateEditorView(QWidget):
                 json.dump(state, fh, indent=2, ensure_ascii=False)
         except OSError as exc:
             QMessageBox.critical(self, "Save Error", f"Could not save:\n{exc}")
+            return False
         else:
+            self._has_unsaved_changes = False
             QMessageBox.information(self, "Saved", f"Template saved:\n{path}")
+            return True
 
     def _on_load_template(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -339,6 +357,7 @@ class TemplateEditorView(QWidget):
             QMessageBox.critical(self, "Load Error", f"Cannot read template:\n{exc}")
             return
         self._restore_state(state)
+        self._has_unsaved_changes = False
 
     # ------------------------------------------------------------------
     # Scene event
@@ -507,6 +526,7 @@ class TemplateEditorView(QWidget):
         """Apply fn(item) to the currently selected FieldItem, if any."""
         if self._selected_item is not None:
             fn(self._selected_item)
+            self._mark_dirty()
 
     def _mkbtn(
         self,

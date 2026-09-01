@@ -54,11 +54,17 @@ def check_pre_generation(output_dir: str, estimated_size_bytes: int = 10 * 1024 
 def get_unique_filename(output_dir: str, base_name: str, ext: str = ".pdf") -> str:
     """
     Intelligent naming: Returns non-conflicting filepath by appending _1, _2, etc.
+    Handles Windows reserved names, invalid characters, and trailing dots/spaces.
     """
     # Sanitize base_name
-    safe_base = "".join(c for c in base_name if c.isalnum() or c in (" ", "_", "-")).rstrip()
-    if not safe_base:
-        safe_base = "Result"
+    safe_base = "".join(c for c in base_name if c.isalnum() or c in (" ", "_", "-")).strip(" .")
+    
+    # Windows reserved filenames check
+    reserved = {"CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", 
+                "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", 
+                "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"}
+    if not safe_base or safe_base.upper() in reserved:
+        safe_base = f"Result_{safe_base}" if safe_base else "Result"
 
     candidate = os.path.join(output_dir, f"{safe_base}{ext}")
     if not os.path.exists(candidate):

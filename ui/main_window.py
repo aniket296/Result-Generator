@@ -42,7 +42,6 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self._has_unsaved_changes = True   # mocked True for Step-1 testing
 
         self.setWindowTitle(APP_NAME)
         self.setMinimumSize(1024, 680)
@@ -251,13 +250,13 @@ class MainWindow(QMainWindow):
     # ── Close event ───────────────────────────────────────────────────────────
 
     def closeEvent(self, event):
-        if not self._has_unsaved_changes:
+        if not hasattr(self, "_template_editor_view") or not self._template_editor_view.has_unsaved_changes():
             event.accept()
             return
 
         msg = QMessageBox(self)
         msg.setWindowTitle("Unsaved Changes")
-        msg.setText("You have unsaved changes.")
+        msg.setText("You have unsaved changes in your template.")
         msg.setInformativeText("Do you want to save before closing?")
         msg.setIcon(QMessageBox.Icon.Warning)
 
@@ -271,10 +270,13 @@ class MainWindow(QMainWindow):
         clicked = msg.clickedButton()
 
         if clicked == save_btn:
-            # TODO: trigger save logic in future steps
-            self._has_unsaved_changes = False
-            event.accept()
+            saved = self._template_editor_view.save_template()
+            if saved:
+                event.accept()
+            else:
+                event.ignore()
         elif clicked == no_save_btn:
             event.accept()
         else:                  # Cancel or dialog closed
             event.ignore()
+
