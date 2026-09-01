@@ -1,4 +1,4 @@
-﻿"""
+"""
 Template Editor view.
 
 Layout
@@ -257,6 +257,11 @@ class TemplateEditorView(QWidget):
         """Receive column headers from DashboardView and forward to panel."""
         self._excel_headers = headers
         self._props.set_excel_headers(headers)
+
+    def get_template_state(self) -> dict:
+        """Returns the current template dictionary state."""
+        return self._get_state()
+
 
     # ------------------------------------------------------------------
     # Toolbar action slots

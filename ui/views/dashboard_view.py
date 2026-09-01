@@ -42,6 +42,9 @@ class DashboardView(QWidget):
     # Emitted after a file is successfully loaded; carries the headers list.
     # MainWindow connects this to TemplateEditorView.set_excel_headers().
     excel_loaded = pyqtSignal(list)
+    # Emitted when the user clicks 'Generate All'
+    generate_requested = pyqtSignal()
+
 
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -96,9 +99,30 @@ class DashboardView(QWidget):
         """)
         self._load_btn.clicked.connect(self._on_load_excel)
 
+        self._gen_btn = QPushButton("🚀   Generate All")
+        self._gen_btn.setFixedHeight(38)
+        self._gen_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._gen_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4f7ef8;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 0 20px;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            QPushButton:hover   { background-color: #3b6ef0; }
+            QPushButton:pressed { background-color: #2c5ee8; }
+            QPushButton:disabled { background-color: #d1d5db; color: #9ca3af; }
+        """)
+        self._gen_btn.setEnabled(False)
+        self._gen_btn.clicked.connect(self.generate_requested.emit)
+
         bar.addWidget(title)
         bar.addStretch()
         bar.addWidget(self._load_btn)
+        bar.addWidget(self._gen_btn)
         return bar
 
     # ── Empty state ───────────────────────────────────────────────────────────
@@ -382,6 +406,7 @@ class DashboardView(QWidget):
 
     def _on_clear(self) -> None:
         self._excel_data = None
+        self._gen_btn.setEnabled(False)
         self._headers_list.clear()
         self._validation_result.setStyleSheet("font-size: 12px; color: #6b7280;")
         self._validation_result.setText(
@@ -392,10 +417,15 @@ class DashboardView(QWidget):
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
+    def get_excel_data(self) -> dict | None:
+        """Returns the currently loaded Excel data dictionary."""
+        return self._excel_data
+
     def _populate_ui(self, data: dict) -> None:
         self._filename_label.setText(os.path.basename(data["filepath"]))
         self._rowcount_badge.setText(f"{data['total_rows']} row(s)")
         self._colcount_badge.setText(f"{len(data['headers'])} column(s)")
+        self._gen_btn.setEnabled(True)
 
         self._headers_list.clear()
         for i, header in enumerate(data["headers"], start=1):

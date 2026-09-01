@@ -23,6 +23,7 @@ from PyQt6.QtGui import QIcon, QFont
 from ui.views.dashboard_view import DashboardView
 from ui.views.template_editor_view import TemplateEditorView
 from ui.views.settings_view import SettingsView
+from ui.dialogs.generation_dialog import GenerationSetupDialog, GenerationProgressDialog
 from utils.constants import APP_NAME
 
 # ── Palette ────────────────────────────────────────────────────────────────
@@ -174,7 +175,69 @@ class MainWindow(QMainWindow):
             self._template_editor_view.set_excel_headers
         )
 
+        # Trigger batch generation
+        self._dashboard_view.generate_requested.connect(
+            self._on_trigger_batch_generation
+        )
+
         return self._stack
+
+    def _on_trigger_batch_generation(self):
+        excel_data = self._dashboard_view.get_excel_data()
+        if not excel_data or not excel_data.get("rows"):
+            QMessageBox.warning(
+                self,
+                "No Data Loaded",
+                "Please load an Excel file with student records first."
+            )
+            return
+
+        template_state = self._template_editor_view.get_template_state()
+        fields = template_state.get("fields", [])
+        if not fields:
+            res = QMessageBox.question(
+                self,
+                "No Template Fields Configured",
+                "Your template currently has no text fields placed.\n\n"
+                "Would you like to switch to the Template Editor to configure fields first?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if res == QMessageBox.StandardButton.Yes:
+                self._navigate(1)
+            return
+
+        # Check background
+        bg_path = template_state.get("background", {}).get("path", "")
+        if not bg_path or not os.path.exists(bg_path):
+            QMessageBox.warning(
+                self,
+                "Missing Background",
+                "The template has no background image/PDF or the file path is invalid.\n\n"
+                "Please configure a valid background in the Template Editor."
+            )
+            self._navigate(1)
+            return
+
+        # 1. Setup dialog (Folder selection, naming column, permission/disk checks)
+        headers = excel_data.get("headers", [])
+        rows = excel_data.get("rows", [])
+        setup_dlg = GenerationSetupDialog(headers, len(rows), self)
+        if setup_dlg.exec() != GenerationSetupDialog.DialogCode.Accepted:
+            return
+
+        out_dir = setup_dlg.selected_output_dir
+        name_col = setup_dlg.selected_name_col
+
+        # 2. Progress dialog & Execution
+        prog_dlg = GenerationProgressDialog(
+            template_state=template_state,
+            rows=rows,
+            output_dir=out_dir,
+            name_column=name_col,
+            parent=self,
+        )
+        prog_dlg.start()
+
 
 
     # ── Navigation ────────────────────────────────────────────────────────────
