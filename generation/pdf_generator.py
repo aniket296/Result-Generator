@@ -1,4 +1,4 @@
-﻿"""
+"""
 PDF Generation & Batch Processing Engine using PyMuPDF (fitz).
 
 Handles:
@@ -15,7 +15,7 @@ import os
 import shutil
 from typing import Callable
 
-import fitz  # PyMuPDF
+import pymupdf
 from PyQt6.QtCore import QObject, QThread, pyqtSignal, QMutex, QWaitCondition
 
 
@@ -98,10 +98,10 @@ def generate_single_pdf(
     canvas_w = float(canvas_info.get("width", 794))
     canvas_h = float(canvas_info.get("height", 1123))
 
-    doc = fitz.open()
+    doc = pymupdf.open()
 
     if bg_type == "pdf" and os.path.exists(bg_path):
-        bg_doc = fitz.open(bg_path)
+        bg_doc = pymupdf.open(bg_path)
         doc.insert_pdf(bg_doc, from_page=0, to_page=0)
         page = doc[0]
         page_rect = page.rect
@@ -109,7 +109,7 @@ def generate_single_pdf(
         scale_y = page_rect.height / canvas_h
     elif os.path.exists(bg_path):
         # Image background or default blank page
-        page_rect = fitz.Rect(0, 0, canvas_w * 72.0 / 96.0, canvas_h * 72.0 / 96.0)
+        page_rect = pymupdf.Rect(0, 0, canvas_w * 72.0 / 96.0, canvas_h * 72.0 / 96.0)
         page = doc.new_page(width=page_rect.width, height=page_rect.height)
         scale_x = page_rect.width / canvas_w
         scale_y = page_rect.height / canvas_h
@@ -117,7 +117,7 @@ def generate_single_pdf(
         page.insert_image(page_rect, filename=bg_path)
     else:
         # Blank canvas
-        page_rect = fitz.Rect(0, 0, canvas_w * 72.0 / 96.0, canvas_h * 72.0 / 96.0)
+        page_rect = pymupdf.Rect(0, 0, canvas_w * 72.0 / 96.0, canvas_h * 72.0 / 96.0)
         page = doc.new_page(width=page_rect.width, height=page_rect.height)
         scale_x = page_rect.width / canvas_w
         scale_y = page_rect.height / canvas_h
@@ -137,7 +137,7 @@ def generate_single_pdf(
         fw = float(field.get("width", 100)) * scale_x
         fh = float(field.get("height", 30)) * scale_y
 
-        target_rect = fitz.Rect(fx, fy, fx + fw, fy + fh)
+        target_rect = pymupdf.Rect(fx, fy, fx + fw, fy + fh)
         font_size = float(field.get("font_size", 12)) * scale_y
         color = _hex_to_rgb_float(field.get("color", "#000000"))
         align_str = field.get("alignment", "Left")
@@ -149,7 +149,7 @@ def generate_single_pdf(
         elif align_str == "Right":
             align_val = 2
 
-        # Insert textbox (fitz handles bounding & alignment)
+        # Insert textbox (pymupdf handles bounding & alignment)
         page.insert_textbox(
             target_rect,
             str(val),

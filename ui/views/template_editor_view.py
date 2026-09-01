@@ -53,7 +53,7 @@ from ui.widgets.properties_panel import PropertiesPanel
 from utils.constants import APP_DATA_DIR
 
 try:
-    import fitz        # PyMuPDF
+    import pymupdf
     _HAS_PYMUPDF = True
 except ImportError:
     _HAS_PYMUPDF = False
@@ -384,9 +384,9 @@ class TemplateEditorView(QWidget):
                 )
                 return None, ""
             try:
-                doc  = fitz.open(path)
+                doc  = pymupdf.open(path)
                 page = doc[0]
-                mat  = fitz.Matrix(2.0, 2.0)   # 2x for crisp rendering
+                mat  = pymupdf.Matrix(2.0, 2.0)   # 2x for crisp rendering
                 pix  = page.get_pixmap(matrix=mat)
                 doc.close()
                 qpix = QPixmap()
