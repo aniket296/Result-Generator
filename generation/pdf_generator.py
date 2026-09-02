@@ -17,6 +17,7 @@ Features:
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import shutil
@@ -217,6 +218,48 @@ def _hex_to_rgb_float(hex_str: str) -> tuple[float, float, float]:
     return (0.0, 0.0, 0.0)
 
 
+def _extract_field_value(f: dict[str, Any], row_data: dict[str, Any]) -> str:
+    """Safely extracts and formats string value from row_data for a template field."""
+    raw_val = None
+    mapped_col = f.get("mapped_column")
+    label = f.get("label")
+
+    # 1. Direct match with mapped column name
+    if mapped_col and mapped_col in row_data:
+        raw_val = row_data[mapped_col]
+    # 2. Direct match with label name
+    elif label and label in row_data:
+        raw_val = row_data[label]
+    else:
+        # 3. Fuzzy / case-insensitive / trimmed match
+        candidates = [k for k in [mapped_col, label] if k]
+        for cand in candidates:
+            cand_clean = str(cand).strip().lower()
+            for rk, rv in row_data.items():
+                if str(rk).strip().lower() == cand_clean:
+                    raw_val = rv
+                    break
+            if raw_val is not None:
+                break
+
+    # 4. Explicit type casting & graceful handling of None, NaN, etc.
+    if raw_val is None:
+        return ""
+    if isinstance(raw_val, float):
+        if math.isnan(raw_val) or math.isinf(raw_val):
+            return ""
+        if raw_val.is_integer():
+            return str(int(raw_val))
+        return str(raw_val)
+    if isinstance(raw_val, (int, bool)):
+        return str(raw_val)
+
+    s_val = str(raw_val).strip()
+    if s_val.lower() in ("nan", "none", "null", "<na>"):
+        return ""
+    return s_val
+
+
 # ── Single PDF Generator ─────────────────────────────────────────────────────
 
 def generate_single_pdf(
@@ -261,17 +304,26 @@ def generate_single_pdf(
     fields = template_state.get("fields", [])
     for f in fields:
         col_key = f.get("mapped_column") or f.get("label", "")
-        text_val = str(row_data.get(col_key, ""))
+        text_val = _extract_field_value(f, row_data)
 
-        # Coordinates mapped to PDF points
-        x0 = float(f.get("x", 0.0)) * scale_x
-        y0 = float(f.get("y", 0.0)) * scale_y
-        w  = float(f.get("width", 100.0)) * scale_x
-        h  = float(f.get("height", 30.0)) * scale_y
-        box_rect = pymupdf.Rect(x0, y0, x0 + w, y0 + h)
+        # Coordinates mapped to PDF points with top-edge protection
+        x0 = max(0.0, float(f.get("x", 0.0)) * scale_x)
+        y0 = max(0.0, float(f.get("y", 0.0)) * scale_y)
+        w  = max(10.0, float(f.get("width", 100.0)) * scale_x)
+        h  = max(10.0, float(f.get("height", 30.0)) * scale_y)
 
-        font_size = float(f.get("font_size", 12)) * min(scale_x, scale_y)
+        # Ensure field is within bounds and not clipped off top/left
+        x0 = min(x0, max(0.0, page_rect.width - 5.0))
+        y0 = min(y0, max(0.0, page_rect.height - 5.0))
+
+        font_size = max(4.0, float(f.get("font_size", 12)) * min(scale_x, scale_y))
         color = _hex_to_rgb_float(f.get("color", "#000000"))
+
+        # Console Debugging: Right before the PyMuPDF insert loop
+        print(f"[DEBUG PDF] Field: '{col_key}' | Pos: ({x0:.1f}, {y0:.1f}) | Dim: ({w:.1f}, {h:.1f}) | Value: '{text_val}'")
+
+        if not text_val:
+            continue
 
         align_str = f.get("alignment", "Left")
         align_code = 0  # Left
@@ -290,8 +342,13 @@ def generate_single_pdf(
         elif italic:
             font_name = "heit"
 
+        # Provide ample vertical headroom so tight bounding boxes don't cause PyMuPDF to drop text
+        is_multiline = f.get("multiline", False)
+        effective_h = max(h, font_size * 1.5) if not is_multiline else h
+        box_rect = pymupdf.Rect(x0, y0, x0 + w, y0 + effective_h)
+
         # Insert textbox with PyMuPDF
-        page.insert_textbox(
+        rc = page.insert_textbox(
             box_rect,
             text_val,
             fontsize=font_size,
@@ -299,6 +356,39 @@ def generate_single_pdf(
             color=color,
             align=align_code,
         )
+
+        # Fallback if text overflowed the box (rc < 0): ensure it renders on the page
+        if rc < 0:
+            if not is_multiline:
+                # Direct single-line text insertion fallback
+                if align_code == 1:
+                    tlen = pymupdf.get_text_length(text_val, fontname=font_name, fontsize=font_size)
+                    pt_x = max(0.0, x0 + (w - tlen) / 2.0)
+                elif align_code == 2:
+                    tlen = pymupdf.get_text_length(text_val, fontname=font_name, fontsize=font_size)
+                    pt_x = max(0.0, x0 + w - tlen)
+                else:
+                    pt_x = x0
+                page.insert_text(
+                    pymupdf.Point(pt_x, y0 + font_size * 0.9),
+                    text_val,
+                    fontsize=font_size,
+                    fontname=font_name,
+                    color=color,
+                )
+            else:
+                # Try with smaller font size until it fits
+                for shrink in (0.85, 0.7, 0.55):
+                    alt_rc = page.insert_textbox(
+                        pymupdf.Rect(x0, y0, x0 + w, y0 + max(h, font_size * 2)),
+                        text_val,
+                        fontsize=font_size * shrink,
+                        fontname=font_name,
+                        color=color,
+                        align=align_code,
+                    )
+                    if alt_rc >= 0:
+                        break
 
     # Stamp internal template identity in metadata
     doc.set_metadata({
@@ -422,10 +512,10 @@ class GeneratorWorker(QThread):
 
             # Check for empty cells in mapped fields
             missing_col = ""
-            for col in mapped_columns:
-                val = row.get(col, "")
-                if val is None or str(val).strip() == "":
-                    missing_col = col
+            for f in self.template_state.get("fields", []):
+                val_str = _extract_field_value(f, row)
+                if not val_str:
+                    missing_col = f.get("mapped_column") or f.get("label", "Unknown")
                     break
 
             if missing_col:
