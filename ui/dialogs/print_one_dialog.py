@@ -1,4 +1,4 @@
-﻿"""
+"""
 ui/dialogs/print_one_dialog.py
 Dialog for looking up a single student by Unique Field (e.g. Enrollment / Roll No)
 and directly printing or saving their individual result paper.
@@ -79,7 +79,9 @@ class PrintOneDialog(QDialog):
 
         # Row 1: Column selector
         r1 = QHBoxLayout()
-        r1.addWidget(QLabel("Identifier Column:"))
+        r1_lbl = QLabel("Identifier Column:")
+        r1_lbl.setStyleSheet("font-size: 12px; color: #374151;")
+        r1.addWidget(r1_lbl)
         self._col_combo = QComboBox()
         self._col_combo.setStyleSheet("""
             QComboBox {

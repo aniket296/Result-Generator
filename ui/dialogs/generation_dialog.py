@@ -1,4 +1,4 @@
-﻿"""
+"""
 ui/dialogs/generation_dialog.py
 Complete Generation Setup, Live Dashboard, Error Handling,
 Failed Records Management & Skipped Records Regeneration.
@@ -38,6 +38,14 @@ from generation.pdf_generator import (
     get_unique_result_filename,
     preview_filenames,
 )
+
+
+
+def _make_lbl(text: str, style: str = "") -> QLabel:
+    """Create a QLabel with explicit text colour so it is always visible."""
+    lbl = QLabel(text)
+    lbl.setStyleSheet(style)
+    return lbl
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -130,7 +138,9 @@ class GenerationSetupDialog(QDialog):
 
         # Unique Col
         u_row = QHBoxLayout()
-        u_row.addWidget(QLabel("Unique Identifier Column:"))
+        u_lbl = QLabel("Unique Identifier Column:")
+        u_lbl.setStyleSheet("font-size: 12px; color: #374151;")
+        u_row.addWidget(u_lbl)
         self._unique_combo = QComboBox()
         self._unique_combo.setStyleSheet("color: #000000; background: white; padding: 4px;")
         for h in self.headers:
@@ -146,7 +156,9 @@ class GenerationSetupDialog(QDialog):
 
         # Name Col
         n_row = QHBoxLayout()
-        n_row.addWidget(QLabel("Student Name Column:"))
+        n_lbl = QLabel("Student Name Column:")
+        n_lbl.setStyleSheet("font-size: 12px; color: #374151;")
+        n_row.addWidget(n_lbl)
         self._name_combo = QComboBox()
         self._name_combo.setStyleSheet("color: #000000; background: white; padding: 4px;")
         for h in self.headers:
@@ -456,10 +468,14 @@ class GenerationCompletedDialog(QDialog):
         """)
         c_layout = QVBoxLayout(card)
         c_layout.setSpacing(6)
-        c_layout.addWidget(QLabel(f"• <b>Successfully Generated:</b> {self.generated} results"))
-        c_layout.addWidget(QLabel(f"• <b>Skipped Records:</b> {self.skipped}"))
-        c_layout.addWidget(QLabel(f"• <b>Failed Records:</b> {self.failed}"))
-        c_layout.addWidget(QLabel(f"• <b>Destination Folder:</b><br><span style='color: #4b5563;'>{self.output_dir}</span>"))
+        _lbl_style = "font-size: 13px; color: #111827;"
+        c_layout.addWidget(_make_lbl(f"• <b>Successfully Generated:</b> {self.generated} results", _lbl_style))
+        c_layout.addWidget(_make_lbl(f"• <b>Skipped Records:</b> {self.skipped}", _lbl_style))
+        c_layout.addWidget(_make_lbl(f"• <b>Failed Records:</b> {self.failed}", _lbl_style))
+        c_layout.addWidget(_make_lbl(
+            f"• <b>Destination Folder:</b><br><span style='color: #4b5563;'>{self.output_dir}</span>",
+            _lbl_style
+        ))
         layout.addWidget(card)
 
         layout.addStretch()

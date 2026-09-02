@@ -1,4 +1,4 @@
-﻿"""
+"""
 PropertiesPanel - right-side sidebar for configuring the selected FieldItem.
 
 Allows live editing of:
@@ -262,10 +262,10 @@ class PropertiesPanel(QWidget):
         self._color_btn.clicked.connect(self._on_color_clicked)
         self._sync_color_btn()
 
-        row1.addWidget(QLabel("Size:"))
+        row1.addWidget(self._caption("Size:"))
         row1.addWidget(self._size_spin, stretch=1)
         row1.addSpacing(4)
-        row1.addWidget(QLabel("Color:"))
+        row1.addWidget(self._caption("Color:"))
         row1.addWidget(self._color_btn)
         self._form.addLayout(row1)
 
@@ -301,7 +301,7 @@ class PropertiesPanel(QWidget):
         # Alignment buttons
         row3 = QHBoxLayout()
         row3.setSpacing(4)
-        row3.addWidget(QLabel("Align:"))
+        row3.addWidget(self._caption("Align:"))
         self._align_btns: dict[str, QPushButton] = {}
         for key, sym in [("Left", "L"), ("Center", "C"), ("Right", "R")]:
             btn = QPushButton(sym)
@@ -329,9 +329,9 @@ class PropertiesPanel(QWidget):
         self._y_spin.valueChanged.connect(
             lambda v: self._live(lambda: self.y_changed.emit(v))
         )
-        xy.addWidget(QLabel("X:"))
+        xy.addWidget(self._caption("X:"))
         xy.addWidget(self._x_spin)
-        xy.addWidget(QLabel("Y:"))
+        xy.addWidget(self._caption("Y:"))
         xy.addWidget(self._y_spin)
         self._form.addLayout(xy)
 
@@ -345,9 +345,9 @@ class PropertiesPanel(QWidget):
         self._h_spin.valueChanged.connect(
             lambda v: self._live(lambda: self.height_changed.emit(v))
         )
-        wh.addWidget(QLabel("W:"))
+        wh.addWidget(self._caption("W:"))
         wh.addWidget(self._w_spin)
-        wh.addWidget(QLabel("H:"))
+        wh.addWidget(self._caption("H:"))
         wh.addWidget(self._h_spin)
         self._form.addLayout(wh)
 

@@ -1,4 +1,4 @@
-﻿"""
+"""
 ui/main_window.py
 Top-level application window, navigation routing, operation coordination, and lifecycle management.
 """
@@ -130,7 +130,7 @@ class MainWindow(QMainWindow):
         foot_layout = QVBoxLayout(footer)
         foot_layout.setContentsMargins(20, 0, 20, 10)
         ver = QLabel("v1.0.0 • Offline Release")
-        ver.setStyleSheet("color: #4a4f72; font-size: 11px;")
+        ver.setStyleSheet("color: #8b92b8; font-size: 11px;")
         foot_layout.addWidget(ver)
         layout.addWidget(footer)
 
