@@ -1,37 +1,22 @@
-"""
+﻿"""
 Template Editor view.
 
-Layout
-------
-TemplateEditorView (QWidget)
- └─ QVBoxLayout
-     ├─ Toolbar strip  (fixed height 52px)
-     └─ QHBoxLayout (main content)
-         ├─ _CanvasView  (QGraphicsView, expands to fill space)
-         └─ PropertiesPanel  (fixed width 272px, shows when item selected)
-
-Canvas
-------
-- QGraphicsScene default rect = A4 at 96 dpi (794 x 1123 px)
-- Background: QGraphicsPixmapItem at Z=0, non-movable / non-selectable
-- Fields    : FieldItem instances at Z=1+
-- Ctrl+Scroll = zoom;  rubber-band drag on empty space = multi-select
-
-JSON template format (v1.0)
------------------------------
-{
-  "version": "1.0",
-  "background": {"type": "image"|"pdf"|"", "path": "..."},
-  "canvas": {"width": int, "height": int},
-  "fields": [ <FieldItem.to_dict()>, ... ]
-}
+Features:
+- Visual canvas with image / PDF background rendering.
+- Draggable & resizable FieldItem placement.
+- Duplicate field name validation.
+- Template / Dataset Locking mode when active dataset is loaded.
+- Export blank Excel Dataset matching template field structure.
+- Save / Load JSON template with embedded template UUID.
+- Dirty state tracking and confirmation guards.
 """
 from __future__ import annotations
 
 import json
 import os
+import uuid
 
-from PyQt6.QtCore import Qt, QRectF
+from PyQt6.QtCore import QRectF, Qt
 from PyQt6.QtGui import QBrush, QColor, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QFileDialog,
@@ -47,23 +32,12 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+import pymupdf
 
+from data_engine.excel_loader import export_blank_excel_template
 from ui.widgets.field_item import FieldItem
 from ui.widgets.properties_panel import PropertiesPanel
-from utils.constants import APP_DATA_DIR
-
-try:
-    import pymupdf
-    _HAS_PYMUPDF = True
-except ImportError:
-    _HAS_PYMUPDF = False
-
-_TEMPLATES_DIR = os.path.join(APP_DATA_DIR, "templates")
-
-
-# ---------------------------------------------------------------------------
-# Custom QGraphicsView with Ctrl+Scroll zoom
-# ---------------------------------------------------------------------------
+from utils.constants import TEMPLATES_DIR
 
 
 class _CanvasView(QGraphicsView):
@@ -89,17 +63,14 @@ class _CanvasView(QGraphicsView):
             super().wheelEvent(event)
 
 
-# ---------------------------------------------------------------------------
-# Template Editor View
-# ---------------------------------------------------------------------------
-
-
 class TemplateEditorView(QWidget):
-    """Visual template designer: background image + draggable field placeholders."""
+    """Visual template designer with background overlay and field mapping."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
 
+        self._template_id: str = str(uuid.uuid4())
+        self._template_name: str = "Untitled_Template"
         self._field_items: list[FieldItem] = []
         self._field_counter: int = 0
         self._bg_item: QGraphicsPixmapItem | None = None
@@ -109,38 +80,49 @@ class TemplateEditorView(QWidget):
         self._excel_headers: list[str] = []
         self._initial_fit_done: bool = False
         self._has_unsaved_changes: bool = False
+        self._is_locked: bool = False
 
-        os.makedirs(_TEMPLATES_DIR, exist_ok=True)
         self._build_ui()
 
-    # ------------------------------------------------------------------
-    # UI construction
-    # ------------------------------------------------------------------
+    # ── UI Construction ───────────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-        root.addWidget(self._build_toolbar())
+        # 1. Toolbar
+        toolbar = self._build_toolbar()
+        outer.addWidget(toolbar)
 
         div = QFrame()
         div.setFrameShape(QFrame.Shape.HLine)
         div.setStyleSheet("color: #e5e7eb; margin: 0;")
-        root.addWidget(div)
+        outer.addWidget(div)
 
-        content = QHBoxLayout()
-        content.setContentsMargins(0, 0, 0, 0)
-        content.setSpacing(0)
-        content.addWidget(self._build_canvas(), stretch=1)
-        content.addWidget(self._build_props_panel())
-        root.addLayout(content, stretch=1)
+        # 2. Main content
+        main_layout = QHBoxLayout()
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
-    # ── Toolbar ───────────────────────────────────────────────────────────────
+        # Canvas scene & view
+        self._scene = QGraphicsScene(self)
+        self._scene.setSceneRect(0, 0, 794, 1123)  # A4 at 96 dpi default
+        self._scene.selectionChanged.connect(self._on_selection_changed)
+
+        self._view = _CanvasView(self._scene, self)
+        main_layout.addWidget(self._view, stretch=1)
+
+        # Properties panel
+        self._panel = PropertiesPanel(self)
+        self._connect_panel_signals()
+        main_layout.addWidget(self._panel)
+
+        outer.addLayout(main_layout, stretch=1)
 
     def _build_toolbar(self) -> QWidget:
         bar = QWidget()
-        bar.setFixedHeight(52)
+        bar.setFixedHeight(54)
         bar.setStyleSheet("background: #f9fafb;")
 
         row = QHBoxLayout(bar)
@@ -150,435 +132,362 @@ class TemplateEditorView(QWidget):
         title = QLabel("Template Editor")
         title.setStyleSheet("font-size: 16px; font-weight: 700; color: #1a1a2e;")
         row.addWidget(title)
+
+        # Lock badge
+        self._lock_badge = QLabel("🔒 Template Locked (Active Dataset Loaded)")
+        self._lock_badge.setStyleSheet("""
+            background: #fef3c7; color: #92400e; font-size: 11px;
+            font-weight: 600; padding: 4px 8px; border-radius: 4px;
+        """)
+        self._lock_badge.hide()
+        row.addWidget(self._lock_badge)
+
         row.addSpacing(12)
-        row.addWidget(self._vdivider())
-        row.addSpacing(8)
 
-        self._upload_btn = self._mkbtn("📂  Upload Background", "#22c55e", "#16a34a")
-        self._add_btn    = self._mkbtn("➕  Add Field",          "#4f7ef8", "#3b6ef0")
-        self._del_btn    = self._mkbtn("🗑  Delete",             "#ef4444", "#dc2626")
-        self._del_btn.setEnabled(False)
+        # Action Buttons
+        self._bg_btn = self._tool_btn("🖼  Upload Background", self._on_upload_bg)
+        self._add_btn = self._tool_btn("➕  Add Field", self._on_add_field)
+        self._export_excel_btn = self._tool_btn("📊  Export Excel Template", self._on_export_excel)
+        self._save_btn = self._tool_btn("💾  Save Template", self._on_save_template)
+        self._load_btn = self._tool_btn("📂  Open Template", self._on_load_template)
 
-        self._upload_btn.clicked.connect(self._on_upload_bg)
-        self._add_btn.clicked.connect(self._on_add_field)
-        self._del_btn.clicked.connect(self._on_delete_selected)
-
-        row.addWidget(self._upload_btn)
+        row.addWidget(self._bg_btn)
         row.addWidget(self._add_btn)
-        row.addWidget(self._del_btn)
-        row.addSpacing(8)
-        row.addWidget(self._vdivider())
-        row.addSpacing(8)
-
-        save_btn = self._mkbtn("💾  Save Template", "#1f2937", "#111827")
-        load_btn = self._mkbtn("📤  Load Template", outline=True)
-        save_btn.clicked.connect(self._on_save_template)
-        load_btn.clicked.connect(self._on_load_template)
-        row.addWidget(save_btn)
-        row.addWidget(load_btn)
+        row.addWidget(self._export_excel_btn)
+        row.addWidget(self._save_btn)
+        row.addWidget(self._load_btn)
 
         row.addStretch()
 
         # Zoom controls
-        zm = self._zkbtn
-        self._zoom_lbl = QLabel("100%")
-        self._zoom_lbl.setFixedWidth(44)
-        self._zoom_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._zoom_lbl.setStyleSheet("font-size: 12px; color: #374151;")
+        zoom_out = self._icon_btn("−", lambda: self._view.scale(1 / 1.2, 1 / 1.2))
+        zoom_in  = self._icon_btn("+", lambda: self._view.scale(1.2, 1.2))
+        zoom_fit = self._tool_btn("Fit", self._fit_to_view)
 
-        zout = zm("−")
-        zrst = zm("⟳", 26)
-        zin  = zm("+")
-        zout.clicked.connect(lambda: self._do_zoom(1.0 / 1.2))
-        zrst.clicked.connect(self._reset_zoom)
-        zin.clicked.connect(lambda: self._do_zoom(1.2))
-
-        row.addWidget(QLabel("Zoom:"))
-        row.addWidget(zout)
-        row.addWidget(self._zoom_lbl)
-        row.addWidget(zin)
-        row.addWidget(zrst)
+        row.addWidget(zoom_out)
+        row.addWidget(zoom_in)
+        row.addWidget(zoom_fit)
 
         return bar
 
-    # ── Canvas ────────────────────────────────────────────────────────────────
+    def _connect_panel_signals(self) -> None:
+        p = self._panel
+        p.label_changed.connect(self._on_label_changed)
+        p.column_changed.connect(lambda c: self._apply_to_selected(lambda i: i.set_mapped_column(c)))
+        p.unique_changed.connect(lambda u: self._apply_to_selected(lambda i: i.set_is_unique(u)))
+        p.font_family_changed.connect(lambda f: self._apply_to_selected(lambda i: i.set_font_family(f)))
+        p.font_size_changed.connect(lambda s: self._apply_to_selected(lambda i: i.set_font_size(s)))
+        p.color_changed.connect(lambda c: self._apply_to_selected(lambda i: i.set_color(c)))
+        p.bold_changed.connect(lambda b: self._apply_to_selected(lambda i: i.set_bold(b)))
+        p.italic_changed.connect(lambda it: self._apply_to_selected(lambda i: i.set_italic(it)))
+        p.underline_changed.connect(lambda un: self._apply_to_selected(lambda i: i.set_underline(un)))
+        p.multiline_changed.connect(lambda ml: self._apply_to_selected(lambda i: i.set_multiline(ml)))
+        p.alignment_changed.connect(lambda a: self._apply_to_selected(lambda i: i.set_alignment(a)))
+        p.x_changed.connect(self._on_panel_x)
+        p.y_changed.connect(self._on_panel_y)
+        p.width_changed.connect(lambda w: self._apply_to_selected(lambda i: i.set_field_size(w, i.height)))
+        p.height_changed.connect(lambda h: self._apply_to_selected(lambda i: i.set_field_size(i.width, h)))
+        p.delete_requested.connect(self._on_delete_selected)
 
-    def _build_canvas(self) -> _CanvasView:
-        self._scene = QGraphicsScene(self)
-        # Default canvas = A4 @ 96 dpi
-        self._scene.setSceneRect(QRectF(0, 0, 794, 1123))
-        self._scene.selectionChanged.connect(self._on_selection_changed)
+    # ── Public API ────────────────────────────────────────────────────────────
 
-        self._canvas = _CanvasView(self._scene)
-        return self._canvas
+    def set_excel_columns(self, headers: list[str]) -> None:
+        self._excel_headers = list(headers)
+        self._panel.set_excel_columns(headers)
 
-    # ── Properties panel ──────────────────────────────────────────────────────
-
-    def _build_props_panel(self) -> PropertiesPanel:
-        self._props = PropertiesPanel(self)
-
-        # Wire: panel signal → apply to selected item
-        P = self._props
-        S = self._on_sel   # helper that calls fn(item) if item exists
-
-        P.label_changed.connect(       lambda v: S(lambda i: i.set_label(v)))
-        P.column_changed.connect(      lambda v: S(lambda i: i.set_mapped_column(v)))
-        P.font_family_changed.connect( lambda v: S(lambda i: i.set_font_family(v)))
-        P.font_size_changed.connect(   lambda v: S(lambda i: i.set_font_size(v)))
-        P.color_changed.connect(       lambda v: S(lambda i: i.set_color(v)))
-        P.bold_changed.connect(        lambda v: S(lambda i: i.set_bold(v)))
-        P.italic_changed.connect(      lambda v: S(lambda i: i.set_italic(v)))
-        P.alignment_changed.connect(   lambda v: S(lambda i: i.set_alignment(v)))
-        P.x_changed.connect(           lambda v: S(lambda i: i.setX(float(v))))
-        P.y_changed.connect(           lambda v: S(lambda i: i.setY(float(v))))
-        P.width_changed.connect(       lambda v: S(lambda i: i.set_width(v)))
-        P.height_changed.connect(      lambda v: S(lambda i: i.set_height(v)))
-        P.delete_requested.connect(self._on_delete_selected)
-
-        return self._props
-
-    # ------------------------------------------------------------------
-    # First show: fit canvas into view
-    # ------------------------------------------------------------------
-
-    def showEvent(self, event) -> None:
-        super().showEvent(event)
-        if not self._initial_fit_done:
-            self._canvas.fitInView(
-                self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio
-            )
-            self._sync_zoom_label()
-            self._initial_fit_done = True
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
-    def set_excel_headers(self, headers: list[str]) -> None:
-        """Receive column headers from DashboardView and forward to panel."""
-        self._excel_headers = headers
-        self._props.set_excel_headers(headers)
-
-    def get_template_state(self) -> dict:
-        """Returns the current template dictionary state."""
-        return self._get_state()
+    def set_locked_state(self, locked: bool, reason: str = "") -> None:
+        """Lock or unlock template field modifications when an active dataset is attached."""
+        self._is_locked = locked
+        self._add_btn.setEnabled(not locked)
+        self._bg_btn.setEnabled(not locked)
+        if locked:
+            self._lock_badge.setText(f"🔒 {reason or 'Template Locked (Dataset Active)'}")
+            self._lock_badge.show()
+        else:
+            self._lock_badge.hide()
 
     def has_unsaved_changes(self) -> bool:
-        """Returns True if the template canvas has been modified since last save/load."""
         return self._has_unsaved_changes
 
-    def _mark_dirty(self) -> None:
-        self._has_unsaved_changes = True
+    def get_state(self) -> dict:
+        return self._get_state()
 
-    def save_template(self) -> bool:
-        """Triggers the Save Template dialog. Returns True if saved successfully."""
-        return self._on_save_template()
+    def get_template_fields(self) -> list[str]:
+        """Return list of all field labels in canvas order."""
+        return [f.label for f in self._field_items]
 
-
-    # ------------------------------------------------------------------
-    # Toolbar action slots
-    # ------------------------------------------------------------------
-
-    def _on_upload_bg(self) -> None:
-        if _HAS_PYMUPDF:
-            flt = "Images & PDF (*.png *.jpg *.jpeg *.bmp *.pdf);;All Files (*)"
-        else:
-            flt = "Images (*.png *.jpg *.jpeg *.bmp);;All Files (*)"
-
-        path, _ = QFileDialog.getOpenFileName(self, "Upload Background", "", flt)
-        if not path:
-            return
-        pixmap, bg_type = self._load_as_pixmap(path)
-        if pixmap:
-            self._set_background(pixmap, bg_type, path)
-            self._mark_dirty()
+    # ── Actions ───────────────────────────────────────────────────────────────
 
     def _on_add_field(self) -> None:
-        self._field_counter += 1
-        label = f"Field_{self._field_counter}"
-        centre = self._canvas.mapToScene(
-            self._canvas.viewport().rect().center()
-        )
-        item = FieldItem(
-            label=label,
-            x=centre.x() - 100.0,
-            y=centre.y() - 18.0,
-        )
-        # Pre-populate column dropdown choices from loaded headers
-        if self._excel_headers:
-            item.mapped_column = ""   # user maps explicitly in the panel
+        if self._is_locked:
+            QMessageBox.warning(self, "Template Locked", "Cannot add fields while a dataset is active.")
+            return
 
-        self._register_field(item)
+        self._field_counter += 1
+        name = f"Field_{self._field_counter}"
+        existing = {f.label.lower() for f in self._field_items}
+        while name.lower() in existing:
+            self._field_counter += 1
+            name = f"Field_{self._field_counter}"
+
+        rect = self._scene.sceneRect()
+        cx = rect.center().x() - 100
+        cy = rect.center().y() - 18
+
+        item = FieldItem(label=name, x=cx, y=cy, width=200, height=36)
+        item.position_changed.connect(lambda x, y: self._on_item_moved(item, x, y))
+        item.geometry_changed.connect(lambda w, h: self._on_item_resized(item, w, h))
+
+        self._scene.addItem(item)
+        self._field_items.append(item)
+
         self._scene.clearSelection()
         item.setSelected(True)
         self._mark_dirty()
 
-    def _on_delete_selected(self) -> None:
-        to_remove = [i for i in self._scene.selectedItems() if isinstance(i, FieldItem)]
-        for item in to_remove:
-            self._scene.removeItem(item)
-            if item in self._field_items:
-                self._field_items.remove(item)
-        self._del_btn.setEnabled(False)
+    def _on_label_changed(self, new_label: str) -> None:
+        if not self._selected_item:
+            return
+        clean = new_label.strip()
+        # Prevent duplicate labels
+        for f in self._field_items:
+            if f is not self._selected_item and f.label.lower() == clean.lower():
+                QMessageBox.warning(self, "Duplicate Field Name", f"A field with name '{clean}' already exists.")
+                return
+
+        self._selected_item.set_label(clean or "Field")
         self._mark_dirty()
 
-    def _on_save_template(self) -> bool:
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save Template", _TEMPLATES_DIR,
-            "Template Files (*.json);;All Files (*)"
-        )
-        if not path:
-            return False
-        if not path.endswith(".json"):
-            path += ".json"
-        state = self._get_state()
-        try:
-            with open(path, "w", encoding="utf-8") as fh:
-                json.dump(state, fh, indent=2, ensure_ascii=False)
-        except OSError as exc:
-            QMessageBox.critical(self, "Save Error", f"Could not save:\n{exc}")
-            return False
-        else:
-            self._has_unsaved_changes = False
-            QMessageBox.information(self, "Saved", f"Template saved:\n{path}")
-            return True
+    def _on_delete_selected(self) -> None:
+        if self._is_locked:
+            QMessageBox.warning(self, "Template Locked", "Cannot delete fields while a dataset is active.")
+            return
 
-    def _on_load_template(self) -> None:
+        if not self._selected_item:
+            return
+        item = self._selected_item
+        self._scene.removeItem(item)
+        if item in self._field_items:
+            self._field_items.remove(item)
+        self._selected_item = None
+        self._panel.load_item(None)
+        self._mark_dirty()
+
+    def _on_upload_bg(self) -> None:
+        if self._is_locked:
+            QMessageBox.warning(self, "Template Locked", "Cannot change background while a dataset is active.")
+            return
+
         path, _ = QFileDialog.getOpenFileName(
-            self, "Load Template", _TEMPLATES_DIR,
-            "Template Files (*.json);;All Files (*)"
+            self,
+            "Select Background (Image or PDF)",
+            "",
+            "All Backgrounds (*.png *.jpg *.jpeg *.pdf);;Images (*.png *.jpg *.jpeg);;PDF Files (*.pdf)",
         )
-        if not path:
-            return
-        try:
-            with open(path, "r", encoding="utf-8") as fh:
-                state = json.load(fh)
-        except (OSError, json.JSONDecodeError) as exc:
-            QMessageBox.critical(self, "Load Error", f"Cannot read template:\n{exc}")
-            return
-        self._restore_state(state)
-        self._has_unsaved_changes = False
+        if path:
+            self._load_background_file(path)
+            self._mark_dirty()
 
-    # ------------------------------------------------------------------
-    # Scene event
-    # ------------------------------------------------------------------
+    def _load_background_file(self, path: str) -> None:
+        if path.lower().endswith(".pdf"):
+            doc = pymupdf.open(path)
+            page = doc[0]
+            pix = page.get_pixmap(dpi=150)
+            qpix = QPixmap()
+            qpix.loadFromData(pix.tobytes("png"))
+            doc.close()
+            self._set_background(qpix, "pdf", path)
+        else:
+            qpix = QPixmap(path)
+            if not qpix.isNull():
+                self._set_background(qpix, "image", path)
 
-    def _on_selection_changed(self) -> None:
-        items = [i for i in self._scene.selectedItems() if isinstance(i, FieldItem)]
-
-        # Disconnect position/geometry signals from the old item
-        if self._selected_item is not None:
-            try:
-                self._selected_item.position_changed.disconnect(
-                    self._props.update_position
-                )
-                self._selected_item.geometry_changed.disconnect(
-                    self._props.update_geometry
-                )
-            except RuntimeError:
-                pass
-
-        self._selected_item = items[0] if items else None
-
-        # Connect to new item
-        if self._selected_item is not None:
-            self._selected_item.position_changed.connect(self._props.update_position)
-            self._selected_item.geometry_changed.connect(self._props.update_geometry)
-
-        self._props.load_item(self._selected_item)
-        self._del_btn.setEnabled(self._selected_item is not None)
-
-    # ------------------------------------------------------------------
-    # Background management
-    # ------------------------------------------------------------------
-
-    def _load_as_pixmap(self, path: str) -> tuple[QPixmap | None, str]:
-        ext = os.path.splitext(path)[1].lower()
-
-        if ext == ".pdf":
-            if not _HAS_PYMUPDF:
-                QMessageBox.warning(
-                    self, "PyMuPDF Missing",
-                    "Install PyMuPDF to use PDF backgrounds:\n  pip install PyMuPDF"
-                )
-                return None, ""
-            try:
-                doc  = pymupdf.open(path)
-                page = doc[0]
-                mat  = pymupdf.Matrix(2.0, 2.0)   # 2x for crisp rendering
-                pix  = page.get_pixmap(matrix=mat)
-                doc.close()
-                qpix = QPixmap()
-                qpix.loadFromData(bytes(pix.tobytes("png")))
-                return qpix, "pdf"
-            except Exception as exc:
-                QMessageBox.critical(self, "PDF Error", f"Could not render PDF:\n{exc}")
-                return None, ""
-
-        # Image formats
-        qpix = QPixmap(path)
-        if qpix.isNull():
-            QMessageBox.critical(self, "Image Error", f"Could not load image:\n{path}")
-            return None, ""
-        return qpix, "image"
-
-    def _set_background(self, pixmap: QPixmap, bg_type: str, bg_path: str) -> None:
-        if self._bg_item is not None:
+    def _set_background(self, pixmap: QPixmap, bg_type: str, path: str) -> None:
+        if self._bg_item:
             self._scene.removeItem(self._bg_item)
+            self._bg_item = None
 
         self._bg_item = QGraphicsPixmapItem(pixmap)
         self._bg_item.setZValue(0)
-        self._bg_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable,    False)
-        self._bg_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
         self._scene.addItem(self._bg_item)
         self._scene.setSceneRect(QRectF(pixmap.rect()))
-        self._canvas.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
-        self._sync_zoom_label()
-
         self._bg_type = bg_type
-        self._bg_path = bg_path
+        self._bg_path = path
+        self._fit_to_view()
 
-    # ------------------------------------------------------------------
-    # Field management
-    # ------------------------------------------------------------------
+    def _on_export_excel(self) -> None:
+        """Export empty Excel sheet containing columns matching template fields."""
+        fields = [f.mapped_column or f.label for f in self._field_items]
+        if not fields:
+            QMessageBox.warning(self, "No Fields", "Please add at least one field to the template before exporting an Excel sheet.")
+            return
 
-    def _register_field(self, item: FieldItem) -> None:
-        self._scene.addItem(item)
-        self._field_items.append(item)
+        save_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Blank Excel Dataset Template",
+            f"{self._template_name}_Dataset.xlsx",
+            "Excel Files (*.xlsx)",
+        )
+        if save_path:
+            try:
+                export_blank_excel_template(save_path, fields)
+                QMessageBox.information(
+                    self,
+                    "Excel Template Exported",
+                    f"Blank Excel dataset template exported successfully:\n{save_path}",
+                )
+            except Exception as exc:
+                QMessageBox.critical(self, "Export Failed", f"Failed to export Excel template:\n{exc}")
 
-    # ------------------------------------------------------------------
-    # Zoom helpers
-    # ------------------------------------------------------------------
+    def _on_save_template(self) -> bool:
+        save_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Template State",
+            os.path.join(TEMPLATES_DIR, f"{self._template_name}.json"),
+            "Template Files (*.json)",
+        )
+        if not save_path:
+            return False
 
-    def _do_zoom(self, factor: float) -> None:
-        self._canvas.scale(factor, factor)
-        self._sync_zoom_label()
+        try:
+            state = self._get_state()
+            with open(save_path, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=2)
+            self._has_unsaved_changes = False
+            self._template_name = os.path.splitext(os.path.basename(save_path))[0]
+            QMessageBox.information(self, "Saved", f"Template saved successfully:\n{save_path}")
+            return True
+        except Exception as exc:
+            QMessageBox.critical(self, "Save Error", f"Failed to save template:\n{exc}")
+            return False
 
-    def _reset_zoom(self) -> None:
-        if self._scene.sceneRect().isValid():
-            self._canvas.fitInView(
-                self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio
-            )
-        else:
-            self._canvas.resetTransform()
-        self._sync_zoom_label()
-
-    def _sync_zoom_label(self) -> None:
-        pct = round(self._canvas.transform().m11() * 100)
-        self._zoom_lbl.setText(f"{pct}%")
-
-    # ------------------------------------------------------------------
-    # JSON serialization
-    # ------------------------------------------------------------------
+    def _on_load_template(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open Template File",
+            TEMPLATES_DIR,
+            "Template Files (*.json)",
+        )
+        if path:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    state = json.load(f)
+                self._restore_state(state)
+                self._has_unsaved_changes = False
+                self._template_name = os.path.splitext(os.path.basename(path))[0]
+            except Exception as exc:
+                QMessageBox.critical(self, "Load Error", f"Failed to load template:\n{exc}")
 
     def _get_state(self) -> dict:
-        sr = self._scene.sceneRect()
+        r = self._scene.sceneRect()
         return {
-            "version"   : "1.0",
-            "background": {"type": self._bg_type, "path": self._bg_path},
-            "canvas"    : {"width": round(sr.width()), "height": round(sr.height())},
-            "fields"    : [item.to_dict() for item in self._field_items],
+            "version": "1.0",
+            "template_id": self._template_id,
+            "template_name": self._template_name,
+            "canvas_width": round(r.width(), 2),
+            "canvas_height": round(r.height(), 2),
+            "background": {
+                "type": self._bg_type,
+                "path": self._bg_path,
+            },
+            "fields": [f.to_dict() for f in self._field_items],
         }
 
-    def _restore_state(self, state: dict) -> None:
-        # Clear existing fields
-        for item in list(self._field_items):
-            self._scene.removeItem(item)
+    def _restore_state(self, d: dict) -> None:
+        # Clear fields
+        for f in self._field_items:
+            self._scene.removeItem(f)
         self._field_items.clear()
         self._selected_item = None
-        self._props.load_item(None)
+        self._panel.load_item(None)
 
-        # Restore background
-        bg      = state.get("background", {})
+        self._template_id = d.get("template_id", str(uuid.uuid4()))
+        self._template_name = d.get("template_name", "Template")
+
+        # Background
+        bg = d.get("background", {})
         bg_path = bg.get("path", "")
-        bg_type = bg.get("type", "")
-        if bg_path:
-            if os.path.exists(bg_path):
-                pixmap, resolved = self._load_as_pixmap(bg_path)
-                if pixmap:
-                    self._set_background(pixmap, resolved, bg_path)
-            else:
-                QMessageBox.warning(
-                    self, "Background Not Found",
-                    f"Could not find:\n{bg_path}\n\nFields will still be restored."
-                )
+        if bg_path and os.path.exists(bg_path):
+            self._load_background_file(bg_path)
+        else:
+            w = d.get("canvas_width", 794.0)
+            h = d.get("canvas_height", 1123.0)
+            self._scene.setSceneRect(0, 0, w, h)
 
-        # Restore fields
-        for fdata in state.get("fields", []):
-            item = FieldItem.from_dict(fdata)
-            self._register_field(item)
+        # Fields
+        for fd in d.get("fields", []):
+            item = FieldItem.from_dict(fd)
+            item.position_changed.connect(lambda x, y, it=item: self._on_item_moved(it, x, y))
+            item.geometry_changed.connect(lambda w, h, it=item: self._on_item_resized(it, w, h))
+            self._scene.addItem(item)
+            self._field_items.append(item)
 
-        if self._field_items:
-            # Try to infer the counter from stored labels so new fields don't clash
-            nums = []
-            for it in self._field_items:
-                parts = it.label.rsplit("_", 1)
-                if len(parts) == 2 and parts[1].isdigit():
-                    nums.append(int(parts[1]))
-            if nums:
-                self._field_counter = max(nums)
+        self._fit_to_view()
 
-    # ------------------------------------------------------------------
-    # Widget factory helpers
-    # ------------------------------------------------------------------
+    # ── Helpers ───────────────────────────────────────────────────────────────
 
-    def _on_sel(self, fn) -> None:
-        """Apply fn(item) to the currently selected FieldItem, if any."""
-        if self._selected_item is not None:
+    def _fit_to_view(self) -> None:
+        r = self._scene.sceneRect()
+        if not r.isEmpty():
+            self._view.fitInView(r, Qt.AspectRatioMode.KeepAspectRatio)
+
+    def _mark_dirty(self) -> None:
+        self._has_unsaved_changes = True
+
+    def _on_selection_changed(self) -> None:
+        sel = self._scene.selectedItems()
+        fields = [i for i in sel if isinstance(i, FieldItem)]
+        self._selected_item = fields[0] if fields else None
+        self._panel.load_item(self._selected_item)
+
+    def _on_item_moved(self, item: FieldItem, x: float, y: float) -> None:
+        if item is self._selected_item:
+            self._panel.update_position(x, y)
+        self._mark_dirty()
+
+    def _on_item_resized(self, item: FieldItem, w: float, h: float) -> None:
+        if item is self._selected_item:
+            self._panel.update_geometry(w, h)
+        self._mark_dirty()
+
+    def _on_panel_x(self, x: float) -> None:
+        if self._selected_item:
+            self._selected_item.setX(x)
+            self._mark_dirty()
+
+    def _on_panel_y(self, y: float) -> None:
+        if self._selected_item:
+            self._selected_item.setY(y)
+            self._mark_dirty()
+
+    def _apply_to_selected(self, fn) -> None:
+        if self._selected_item:
             fn(self._selected_item)
             self._mark_dirty()
 
-    def _mkbtn(
-        self,
-        text: str,
-        bg: str | None = None,
-        hover: str | None = None,
-        *,
-        outline: bool = False,
-    ) -> QPushButton:
+    def _tool_btn(self, text: str, slot) -> QPushButton:
         btn = QPushButton(text)
-        btn.setFixedHeight(34)
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        if outline:
-            btn.setStyleSheet("""
-                QPushButton {
-                    background: white; color: #374151;
-                    border: 1px solid #d1d5db; border-radius: 5px;
-                    padding: 0 14px; font-size: 12px; font-weight: 600;
-                }
-                QPushButton:hover { background: #f3f4f6; }
-            """)
-        else:
-            btn.setStyleSheet(f"""
-                QPushButton {{
-                    background: {bg}; color: white;
-                    border: none; border-radius: 5px;
-                    padding: 0 14px; font-size: 12px; font-weight: 600;
-                }}
-                QPushButton:hover    {{ background: {hover}; }}
-                QPushButton:disabled {{ background: #d1d5db; color: #9ca3af; }}
-            """)
-        return btn
-
-    @staticmethod
-    def _zkbtn(text: str, width: int = 24) -> QPushButton:
-        btn = QPushButton(text)
-        btn.setFixedSize(width, 26)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setStyleSheet("""
             QPushButton {
-                background: white; color: #374151;
-                border: 1px solid #d1d5db; border-radius: 4px;
-                font-size: 13px; font-weight: 700;
+                background: white; color: #374151; border: 1px solid #d1d5db;
+                border-radius: 4px; padding: 6px 12px; font-size: 12px; font-weight: 600;
             }
             QPushButton:hover { background: #f3f4f6; }
         """)
+        btn.clicked.connect(slot)
         return btn
 
-    @staticmethod
-    def _vdivider() -> QFrame:
-        div = QFrame()
-        div.setFrameShape(QFrame.Shape.VLine)
-        div.setFixedHeight(28)
-        div.setStyleSheet("color: #e5e7eb;")
-        return div
+    def _icon_btn(self, text: str, slot) -> QPushButton:
+        btn = QPushButton(text)
+        btn.setFixedSize(30, 30)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setStyleSheet("""
+            QPushButton {
+                background: white; color: #374151; border: 1px solid #d1d5db;
+                border-radius: 4px; font-size: 14px; font-weight: 700;
+            }
+            QPushButton:hover { background: #f3f4f6; }
+        """)
+        btn.clicked.connect(slot)
+        return btn

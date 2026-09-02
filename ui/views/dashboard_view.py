@@ -1,21 +1,10 @@
-"""
-Dashboard view – Excel file loader and header inspector.
-
-Layout (when file loaded)
--------------------------
-QVBoxLayout
- ├── Top bar:  title  +  [Load Excel File] button
- ├── Divider
- ├── [empty-state widget]  -- visible when no file loaded
- └── [loaded-state widget] -- visible once a file is loaded
-      ├── File-info bar  (filename · row-count badge · [Clear])
-      └── QHBoxLayout
-           ├── Headers panel  (QListWidget)
-           └── Validation panel (button + result label)
+﻿"""
+Dashboard view – Dataset management, header inspection, validation, printing & batch generation.
 """
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -32,27 +21,34 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from data_engine.excel_loader import load_excel, validate_all_rows
-from data_engine.exceptions import FileLockedError
+from data_engine.excel_loader import (
+    export_dataset_backup,
+    import_dataset_backup,
+    load_excel,
+    validate_all_rows,
+    validate_unique_column,
+)
+from data_engine.exceptions import DuplicateUniqueValueError, FileLockedError
 
 
 class DashboardView(QWidget):
-    """Dashboard screen: load an Excel file and inspect its structure."""
+    """Dashboard screen: load dataset, inspect fields, validate, print & generate."""
 
-    # Emitted after a file is successfully loaded; carries the headers list.
-    # MainWindow connects this to TemplateEditorView.set_excel_headers().
     excel_loaded = pyqtSignal(list)
-    # Emitted when the user clicks 'Generate All'
+    dataset_cleared = pyqtSignal()
+    print_one_requested = pyqtSignal()
+    print_all_requested = pyqtSignal()
     generate_requested = pyqtSignal()
-
-
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._excel_data: dict | None = None
+        self._headers: list[str] = []
+        self._rows: list[dict[str, str]] = []
+        self._source_file_path: str = ""
+
         self._build_ui()
 
-    # ── UI construction ───────────────────────────────────────────────────────
+    # ── UI Construction ───────────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -70,379 +66,369 @@ class DashboardView(QWidget):
 
         self._loaded_state.hide()
 
-    # ── Top bar ───────────────────────────────────────────────────────────────
-
     def _build_top_bar(self) -> QHBoxLayout:
         bar = QHBoxLayout()
-        bar.setSpacing(12)
+        bar.setSpacing(10)
 
         title = QLabel("Dashboard")
-        title.setStyleSheet(
-            "font-size: 22px; font-weight: 700; color: #1a1a2e;"
-        )
+        title.setStyleSheet("font-size: 22px; font-weight: 700; color: #1a1a2e;")
 
-        self._load_btn = QPushButton("📂   Load Excel File")
+        self._load_btn = QPushButton("📂  Load Excel File")
         self._load_btn.setFixedHeight(38)
         self._load_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._load_btn.setStyleSheet("""
             QPushButton {
-                background-color: #22c55e;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 0 20px;
-                font-size: 13px;
-                font-weight: 600;
+                background-color: #22c55e; color: white; border: none;
+                border-radius: 6px; padding: 0 16px; font-size: 13px; font-weight: 600;
             }
-            QPushButton:hover   { background-color: #16a34a; }
-            QPushButton:pressed { background-color: #15803d; }
+            QPushButton:hover { background-color: #16a34a; }
         """)
         self._load_btn.clicked.connect(self._on_load_excel)
 
-        self._gen_btn = QPushButton("🚀   Generate All")
-        self._gen_btn.setFixedHeight(38)
-        self._gen_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._gen_btn.setStyleSheet("""
+        self._import_backup_btn = QPushButton("📦  Import .dataset.backup")
+        self._import_backup_btn.setFixedHeight(38)
+        self._import_backup_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._import_backup_btn.setStyleSheet("""
             QPushButton {
-                background-color: #4f7ef8;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 0 20px;
-                font-size: 13px;
-                font-weight: 600;
+                background-color: #6366f1; color: white; border: none;
+                border-radius: 6px; padding: 0 16px; font-size: 13px; font-weight: 600;
             }
-            QPushButton:hover   { background-color: #3b6ef0; }
-            QPushButton:pressed { background-color: #2c5ee8; }
-            QPushButton:disabled { background-color: #d1d5db; color: #9ca3af; }
+            QPushButton:hover { background-color: #4f46e5; }
         """)
-        self._gen_btn.setEnabled(False)
-        self._gen_btn.clicked.connect(self.generate_requested.emit)
+        self._import_backup_btn.clicked.connect(self._on_import_backup)
+
+        self._export_backup_btn = QPushButton("💾  Export .dataset.backup")
+        self._export_backup_btn.setFixedHeight(38)
+        self._export_backup_btn.setEnabled(False)
+        self._export_backup_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._export_backup_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #f3f4f6; color: #374151; border: 1px solid #d1d5db;
+                border-radius: 6px; padding: 0 16px; font-size: 13px; font-weight: 600;
+            }
+            QPushButton:hover { background-color: #e5e7eb; }
+        """)
+        self._export_backup_btn.clicked.connect(self._on_export_backup)
 
         bar.addWidget(title)
         bar.addStretch()
+        bar.addWidget(self._import_backup_btn)
+        bar.addWidget(self._export_backup_btn)
         bar.addWidget(self._load_btn)
-        bar.addWidget(self._gen_btn)
         return bar
 
-    # ── Empty state ───────────────────────────────────────────────────────────
-
     def _build_empty_state(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.setSpacing(10)
+        box = QFrame()
+        box.setObjectName("EmptyStateCard")
+        box.setStyleSheet("""
+            QFrame#EmptyStateCard {
+                background-color: #ffffff; border: 2px dashed #d1d5db;
+                border-radius: 12px;
+            }
+        """)
+        v = QVBoxLayout(box)
+        v.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        v.setSpacing(12)
 
-        icon = QLabel("📋")
+        icon = QLabel("📊")
+        icon.setStyleSheet("font-size: 48px;")
         icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon.setStyleSheet("font-size: 56px;")
 
-        heading = QLabel("No Excel File Loaded")
-        heading.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        heading.setStyleSheet(
-            "font-size: 20px; font-weight: 700; color: #374151;"
+        head = QLabel("No Student Dataset Loaded")
+        head.setStyleSheet("font-size: 18px; font-weight: 600; color: #111827;")
+        head.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        sub = QLabel(
+            "Click 'Load Excel File' above to ingest student records (.xlsx / .xls)\n"
+            "or import an external '.dataset.backup' file."
         )
+        sub.setStyleSheet("font-size: 13px; color: #6b7280;")
+        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        hint = QLabel(
-            'Click \u201cLoad Excel File\u201d to get started.\n'
-            "Column headers from your sheet will be listed here."
-        )
-        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        hint.setWordWrap(True)
-        hint.setStyleSheet("font-size: 13px; color: #9ca3af;")
-
-        layout.addWidget(icon)
-        layout.addWidget(heading)
-        layout.addWidget(hint)
-        return widget
-
-    # ── Loaded state ──────────────────────────────────────────────────────────
+        v.addWidget(icon)
+        v.addWidget(head)
+        v.addWidget(sub)
+        return box
 
     def _build_loaded_state(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(14)
+        root = QWidget()
+        v = QVBoxLayout(root)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(14)
 
-        layout.addWidget(self._build_file_info_bar())
+        v.addWidget(self._build_file_info_bar())
 
-        content = QHBoxLayout()
-        content.setSpacing(14)
-        content.addWidget(self._build_headers_panel(),    stretch=1)
-        content.addWidget(self._build_validation_panel(), stretch=1)
-        layout.addLayout(content)
+        # Main operations bar (Print One, Print All, Save All)
+        ops_group = QGroupBox("Operations")
+        ops_group.setStyleSheet("""
+            QGroupBox {
+                font-size: 13px; font-weight: 700; color: #1a1a2e;
+                border: 1px solid #e5e7eb; border-radius: 8px;
+                padding-top: 14px; background: white;
+            }
+        """)
+        ops_row = QHBoxLayout(ops_group)
+        ops_row.setSpacing(10)
 
-        return widget
+        p1_btn = QPushButton("🔍  Print Single Result")
+        p1_btn.setFixedHeight(36)
+        p1_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        p1_btn.setStyleSheet("""
+            QPushButton {
+                background: #f3f4f6; color: #1f2937; border: 1px solid #d1d5db;
+                border-radius: 5px; padding: 0 14px; font-weight: 600; font-size: 12px;
+            }
+            QPushButton:hover { background: #e5e7eb; }
+        """)
+        p1_btn.clicked.connect(self.print_one_requested.emit)
 
-    def _build_file_info_bar(self) -> QFrame:
+        pall_btn = QPushButton("🖨  Print All Results")
+        pall_btn.setFixedHeight(36)
+        pall_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        pall_btn.setStyleSheet("""
+            QPushButton {
+                background: #f3f4f6; color: #1f2937; border: 1px solid #d1d5db;
+                border-radius: 5px; padding: 0 14px; font-weight: 600; font-size: 12px;
+            }
+            QPushButton:hover { background: #e5e7eb; }
+        """)
+        pall_btn.clicked.connect(self.print_all_requested.emit)
+
+        gen_all_btn = QPushButton("🚀  Save All (Generate PDFs)")
+        gen_all_btn.setFixedHeight(36)
+        gen_all_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        gen_all_btn.setStyleSheet("""
+            QPushButton {
+                background: #4f7ef8; color: white; border: none;
+                border-radius: 5px; padding: 0 18px; font-weight: 700; font-size: 12px;
+            }
+            QPushButton:hover { background: #3b6ef0; }
+        """)
+        gen_all_btn.clicked.connect(self.generate_requested.emit)
+
+        ops_row.addWidget(p1_btn)
+        ops_row.addWidget(pall_btn)
+        ops_row.addStretch()
+        ops_row.addWidget(gen_all_btn)
+        v.addWidget(ops_group)
+
+        # Columns + Validation
+        cols_row = QHBoxLayout()
+        cols_row.setSpacing(14)
+        cols_row.addWidget(self._build_headers_panel(), stretch=2)
+        cols_row.addWidget(self._build_validation_panel(), stretch=3)
+        v.addLayout(cols_row, stretch=1)
+
+        return root
+
+    def _build_file_info_bar(self) -> QWidget:
         bar = QFrame()
-        bar.setObjectName("FileInfoBar")
-        bar.setFixedHeight(58)
         bar.setStyleSheet("""
-            QFrame#FileInfoBar {
-                background: #eff6ff;
-                border: 1px solid #bfdbfe;
-                border-radius: 8px;
+            QFrame {
+                background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px;
+                padding: 4px;
             }
         """)
         row = QHBoxLayout(bar)
-        row.setContentsMargins(16, 0, 16, 0)
-        row.setSpacing(14)
+        row.setContentsMargins(14, 8, 14, 8)
+        row.setSpacing(12)
 
-        icon = QLabel("\U0001f4c4")          # 📄
+        icon = QLabel("📄")
         icon.setStyleSheet("font-size: 20px;")
+        self._filename_label = QLabel()
+        self._filename_label.setStyleSheet("font-size: 13px; font-weight: 600; color: #15803d;")
 
-        self._filename_label = QLabel("\u2014")
-        self._filename_label.setStyleSheet(
-            "font-size: 13px; font-weight: 600; color: #1e40af;"
-        )
-
-        self._rowcount_badge = QLabel("")
-        self._rowcount_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._rowcount_badge = QLabel()
         self._rowcount_badge.setStyleSheet("""
-            background: #3b82f6;
-            color: white;
-            border-radius: 10px;
-            padding: 2px 12px;
-            font-size: 12px;
-            font-weight: 600;
+            background: #dcfce7; color: #166534; font-size: 12px; font-weight: 600;
+            padding: 3px 10px; border-radius: 12px;
         """)
 
-        self._colcount_badge = QLabel("")
-        self._colcount_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._colcount_badge.setStyleSheet("""
-            background: #8b5cf6;
-            color: white;
-            border-radius: 10px;
-            padding: 2px 12px;
-            font-size: 12px;
-            font-weight: 600;
-        """)
-
-        self._clear_btn = QPushButton("\u2715  Clear")
-        self._clear_btn.setFixedHeight(28)
-        self._clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._clear_btn.setStyleSheet("""
+        clear_btn = QPushButton("✕ Clear Dataset")
+        clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        clear_btn.setStyleSheet("""
             QPushButton {
-                background: transparent;
-                color: #6b7280;
-                border: 1px solid #d1d5db;
-                border-radius: 5px;
-                padding: 0 10px;
-                font-size: 12px;
+                background: transparent; color: #dc2626; border: none;
+                font-size: 12px; font-weight: 600; padding: 4px 8px;
             }
-            QPushButton:hover {
-                background: #fee2e2;
-                color: #dc2626;
-                border-color: #fca5a5;
-            }
+            QPushButton:hover { text-decoration: underline; }
         """)
-        self._clear_btn.clicked.connect(self._on_clear)
+        clear_btn.clicked.connect(self._on_clear)
 
         row.addWidget(icon)
         row.addWidget(self._filename_label, stretch=1)
         row.addWidget(self._rowcount_badge)
-        row.addWidget(self._colcount_badge)
-        row.addWidget(self._clear_btn)
+        row.addWidget(clear_btn)
         return bar
 
     def _build_headers_panel(self) -> QGroupBox:
-        group = QGroupBox("Column Headers")
+        group = QGroupBox("Dataset Columns")
         group.setStyleSheet("""
             QGroupBox {
                 font-size: 13px; font-weight: 600; color: #374151;
                 border: 1px solid #e5e7eb; border-radius: 8px;
-                margin-top: 8px; background: white;
+                padding-top: 14px; background: white;
             }
-            QGroupBox::title { subcontrol-origin: margin; padding: 0 6px; }
         """)
         layout = QVBoxLayout(group)
         layout.setContentsMargins(10, 12, 10, 10)
 
         self._headers_list = QListWidget()
-        self._headers_list.setAlternatingRowColors(True)
         self._headers_list.setStyleSheet("""
             QListWidget {
-                border: none;
-                font-size: 13px;
-                color: #111827;
-                background: white;
-                alternate-background-color: #f9fafb;
+                border: none; font-size: 12px; color: #111827; background: white;
             }
-            QListWidget::item {
-                padding: 8px 10px;
-            }
-            QListWidget::item:selected {
-                background-color: #eff6ff;
-                color: #1d4ed8;
-            }
-            QListWidget::item:hover {
-                background-color: #f0f9ff;
-            }
+            QListWidget::item { padding: 6px 8px; }
+            QListWidget::item:hover { background-color: #f0f9ff; }
         """)
         layout.addWidget(self._headers_list)
         return group
 
     def _build_validation_panel(self) -> QGroupBox:
-        group = QGroupBox("Data Validation")
+        group = QGroupBox("Data Integrity & Validation")
         group.setStyleSheet("""
             QGroupBox {
                 font-size: 13px; font-weight: 600; color: #374151;
                 border: 1px solid #e5e7eb; border-radius: 8px;
-                margin-top: 8px; background: white;
+                padding-top: 14px; background: white;
             }
-            QGroupBox::title { subcontrol-origin: margin; padding: 0 6px; }
         """)
         layout = QVBoxLayout(group)
         layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
 
-        self._validate_btn = QPushButton("\U0001f50d   Validate All Rows for Empty Cells")
-        self._validate_btn.setFixedHeight(38)
-        self._validate_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._validate_btn.setStyleSheet("""
+        desc = QLabel("Scan all rows for empty cells, whitespace-only entries, or duplicate records.")
+        desc.setWordWrap(True)
+        desc.setStyleSheet("font-size: 12px; color: #6b7280;")
+        layout.addWidget(desc)
+
+        val_btn = QPushButton("🔍  Validate All Records")
+        val_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        val_btn.setStyleSheet("""
             QPushButton {
-                background-color: #f59e0b;
-                color: white; border: none;
-                border-radius: 6px;
-                font-size: 13px; font-weight: 600;
+                background: #f3f4f6; color: #374151; border: 1px solid #d1d5db;
+                border-radius: 5px; padding: 8px 14px; font-weight: 600; font-size: 12px;
             }
-            QPushButton:hover   { background-color: #d97706; }
-            QPushButton:pressed { background-color: #b45309; }
+            QPushButton:hover { background: #e5e7eb; }
         """)
-        self._validate_btn.clicked.connect(self._on_validate)
+        val_btn.clicked.connect(self._on_validate_data)
+        layout.addWidget(val_btn)
 
-        self._validation_result = QLabel(
-            "Press the button above to scan all rows\nfor empty or blank cells."
-        )
-        self._validation_result.setAlignment(
-            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft
-        )
-        self._validation_result.setWordWrap(True)
-        self._validation_result.setStyleSheet(
-            "font-size: 12px; color: #6b7280; line-height: 1.7;"
-        )
+        self._val_result_lbl = QLabel("Ready to validate.")
+        self._val_result_lbl.setStyleSheet("font-size: 12px; color: #6b7280;")
+        self._val_result_lbl.setWordWrap(True)
+        layout.addWidget(self._val_result_lbl)
 
-        layout.addWidget(self._validate_btn)
-        layout.addWidget(self._validation_result, stretch=1)
+        layout.addStretch()
         return group
 
-    # ── Slots ─────────────────────────────────────────────────────────────────
+    # ── Actions & Slots ───────────────────────────────────────────────────────
 
     def _on_load_excel(self) -> None:
-        filepath, _ = QFileDialog.getOpenFileName(
+        path, _ = QFileDialog.getOpenFileName(
             self,
-            "Open Excel Workbook",
+            "Select Student Excel File",
             "",
-            "Excel Files (*.xlsx *.xls);;All Files (*)",
+            "Excel Files (*.xlsx *.xls)",
         )
-        if filepath:
-            self._attempt_load(filepath)
-
-    def _attempt_load(self, filepath: str) -> None:
-        """Try to load the file; on FileLockedError show Retry/Cancel dialog."""
-        try:
-            data = load_excel(filepath)
-        except FileLockedError as exc:
-            self._show_locked_dialog(filepath, str(exc))
-        except Exception as exc:
-            QMessageBox.critical(
-                self,
-                "Load Failed",
-                f"Could not load the file:\n\n{exc}",
-            )
-        else:
-            self._excel_data = data
-            self._populate_ui(data)
-
-    def _show_locked_dialog(self, filepath: str, detail: str) -> None:
-        """Show 'File is open in another program' with [Retry] / [Cancel]."""
-        msg = QMessageBox(self)
-        msg.setWindowTitle("File In Use")
-        msg.setText("The file is open in another program.")
-        msg.setInformativeText(detail)
-        msg.setIcon(QMessageBox.Icon.Warning)
-
-        retry_btn  = msg.addButton("Retry",  QMessageBox.ButtonRole.AcceptRole)
-        _cancel    = msg.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
-        msg.setDefaultButton(retry_btn)
-        msg.exec()
-
-        if msg.clickedButton() is retry_btn:
-            self._attempt_load(filepath)   # recursive retry
-
-    def _on_validate(self) -> None:
-        if not self._excel_data:
+        if not path:
             return
 
-        result = validate_all_rows(self._excel_data["rows"])
+        while True:
+            try:
+                headers, rows = load_excel(path)
+                self._source_file_path = path
+                self._headers = headers
+                self._rows = rows
+                self._apply_dataset(os.path.basename(path), headers, rows)
+                break
+            except FileLockedError as exc:
+                reply = QMessageBox.warning(
+                    self,
+                    "File Open in Excel",
+                    str(exc),
+                    QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Retry,
+                )
+                if reply != QMessageBox.StandardButton.Retry:
+                    break
+            except Exception as exc:
+                QMessageBox.critical(self, "Load Error", f"Failed to load Excel file:\n{exc}")
+                break
 
-        if result["is_valid"]:
-            self._validation_result.setStyleSheet(
-                "font-size: 12px; color: #16a34a; font-weight: 600;"
-            )
-            self._validation_result.setText(
-                f"\u2705  All {self._excel_data['total_rows']} row(s) are valid.\n"
-                f"No empty cells detected."
-            )
-        else:
-            ec = result["error_count"]
-            er = len(result["errors_by_row"])
-
-            # Show first 4 errors as a preview
-            preview_lines: list[str] = []
-            for _row_i, errs in list(result["errors_by_row"].items())[:4]:
-                preview_lines.append(f"\u26a0  {errs[0]}")
-            if er > 4:
-                preview_lines.append(f"... and {er - 4} more row(s) with errors.")
-
-            self._validation_result.setStyleSheet(
-                "font-size: 12px; color: #dc2626;"
-            )
-            self._validation_result.setText(
-                f"\u274c  {ec} empty cell(s) across {er} row(s):\n\n"
-                + "\n".join(preview_lines)
-            )
-
-    def _on_clear(self) -> None:
-        self._excel_data = None
-        self._gen_btn.setEnabled(False)
-        self._headers_list.clear()
-        self._validation_result.setStyleSheet("font-size: 12px; color: #6b7280;")
-        self._validation_result.setText(
-            "Press the button above to scan all rows\nfor empty or blank cells."
+    def _on_import_backup(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import Dataset Backup",
+            "",
+            "Dataset Backup Files (*.dataset.backup *.json)",
         )
-        self._loaded_state.hide()
-        self._empty_state.show()
+        if path:
+            try:
+                headers, rows, meta = import_dataset_backup(path)
+                self._headers = headers
+                self._rows = rows
+                self._source_file_path = path
+                self._apply_dataset(os.path.basename(path), headers, rows)
+                QMessageBox.information(self, "Backup Restored", f"Restored {len(rows)} records successfully.")
+            except Exception as exc:
+                QMessageBox.critical(self, "Import Error", f"Failed to restore backup:\n{exc}")
 
-    # ── Helpers ───────────────────────────────────────────────────────────────
+    def _on_export_backup(self) -> None:
+        if not self._rows:
+            return
+        save_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Dataset Backup",
+            "StudentRecords.dataset.backup",
+            "Dataset Backup Files (*.dataset.backup)",
+        )
+        if save_path:
+            try:
+                export_dataset_backup(save_path, self._rows, self._headers)
+                QMessageBox.information(self, "Backup Saved", f"Dataset backup saved successfully to:\n{save_path}")
+            except Exception as exc:
+                QMessageBox.critical(self, "Backup Error", f"Failed to save backup:\n{exc}")
 
-    def get_excel_data(self) -> dict | None:
-        """Returns the currently loaded Excel data dictionary."""
-        return self._excel_data
-
-    def _populate_ui(self, data: dict) -> None:
-        self._filename_label.setText(os.path.basename(data["filepath"]))
-        self._rowcount_badge.setText(f"{data['total_rows']} row(s)")
-        self._colcount_badge.setText(f"{len(data['headers'])} column(s)")
-        self._gen_btn.setEnabled(True)
+    def _apply_dataset(self, filename: str, headers: list[str], rows: list[dict[str, str]]) -> None:
+        self._filename_label.setText(filename)
+        self._rowcount_badge.setText(f"{len(rows)} rows  •  {len(headers)} columns")
 
         self._headers_list.clear()
-        for i, header in enumerate(data["headers"], start=1):
-            item = QListWidgetItem(f"  {i}.   {header}")
-            self._headers_list.addItem(item)
+        for h in headers:
+            self._headers_list.addItem(QListWidgetItem(f"•  {h}"))
 
-        # Reset validation panel for new file
-        self._validation_result.setStyleSheet("font-size: 12px; color: #6b7280;")
-        self._validation_result.setText(
-            "Press the button above to scan all rows\nfor empty or blank cells."
-        )
-
+        self._export_backup_btn.setEnabled(True)
         self._empty_state.hide()
         self._loaded_state.show()
 
-        # Notify the rest of the app (MainWindow wires this to TemplateEditorView)
-        self.excel_loaded.emit(data["headers"])
+        self.excel_loaded.emit(headers)
+
+    def _on_clear(self) -> None:
+        self._headers = []
+        self._rows = []
+        self._source_file_path = ""
+        self._export_backup_btn.setEnabled(False)
+        self._loaded_state.hide()
+        self._empty_state.show()
+        self.dataset_cleared.emit()
+
+    def _on_validate_data(self) -> None:
+        errors = validate_all_rows(self._rows)
+        if not errors:
+            self._val_result_lbl.setText("✅  All records are valid! Zero empty cells found.")
+            self._val_result_lbl.setStyleSheet("color: #16a34a; font-weight: 600; font-size: 12px;")
+        else:
+            lines = [f"❌  Found {len(errors)} empty cell(s):"]
+            for row_num, col in errors[:8]:
+                lines.append(f"• Row {row_num}: Column '{col}' is empty")
+            if len(errors) > 8:
+                lines.append(f"... and {len(errors) - 8} more.")
+            self._val_result_lbl.setText("\n".join(lines))
+            self._val_result_lbl.setStyleSheet("color: #dc2626; font-size: 12px;")
+
+    def get_dataset(self) -> tuple[list[str], list[dict[str, str]]]:
+        return self._headers, self._rows
 
     @staticmethod
     def _make_divider() -> QFrame:

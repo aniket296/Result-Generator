@@ -1,291 +1,548 @@
 """
-PDF Generation & Batch Processing Engine using PyMuPDF (fitz).
+generation/pdf_generator.py
+Comprehensive PDF Generation, Validation, Collision Handling & Recovery Engine.
 
-Handles:
-- Coordinate mapping from Qt Canvas to PDF points.
-- Background embedding (Image or PDF).
-- Stamping text placeholders.
-- Pre-generation disk space & write permission checks.
-- Unique file naming (_1, _2 etc.).
-- QThread worker with pause/resume/skip for missing data handling.
+Features:
+- Windows-compliant filename sanitization, uppercase enforcement (UNIQUE_STUDENT.PDF).
+- Collision resolution (_01.PDF, _02.PDF ... _100.PDF).
+- Reserved Windows device name handling (CON, PRN, AUX, NUL, COM1-9, LPT1-9).
+- High-fidelity PyMuPDF vector & image rendering with multiline word-wrapping.
+- Template UUID metadata stamping.
+- Pre-generation disk space check (+10% buffer) and write access verification.
+- Non-blocking QThread worker with pause/resume/skip state machine.
+- 3-retry per record cap.
+- Crash recovery state tracking (.recovery.json).
+- Session cancellation cleanup.
 """
 from __future__ import annotations
 
+import json
 import os
+import re
 import shutil
-from typing import Callable
+import uuid
+from typing import Any, Callable
 
+from PyQt6.QtCore import QMutex, QObject, QThread, QWaitCondition, pyqtSignal
 import pymupdf
-from PyQt6.QtCore import QObject, QThread, pyqtSignal, QMutex, QWaitCondition
+
+from utils.constants import RECOVERY_DIR
 
 
-def check_pre_generation(output_dir: str, estimated_size_bytes: int = 10 * 1024 * 1024) -> tuple[bool, str]:
+# ── Filename & Path Helpers ───────────────────────────────────────────────────
+
+RESERVED_WINDOWS_NAMES = {
+    "CON", "PRN", "AUX", "NUL",
+    "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+}
+
+
+def sanitize_filename_part(text: str) -> str:
     """
-    Checks if output directory exists and is writable, and checks free disk space (+10% buffer).
+    Sanitize a filename component:
+    - Replace Windows-invalid characters with '_'
+    - Collapse consecutive underscores to a single '_'
+    - Strip leading/trailing underscores, spaces, and periods
     """
+    if not text:
+        return "UNNAMED"
+
+    # Replace invalid chars: \ / : * ? " < > | and non-printables
+    cleaned = re.sub(r'[\\/:*?"<>|\x00-\x1f]', '_', str(text))
+    # Collapse multiple underscores/spaces
+    cleaned = re.sub(r'[\s_]+', '_', cleaned)
+    cleaned = cleaned.strip(" ._")
+
+    return cleaned if cleaned else "UNNAMED"
+
+
+def get_unique_result_filename(
+    output_dir: str,
+    unique_val: str,
+    student_name: str,
+    ext: str = ".PDF",
+) -> str:
+    """
+    Constructs the exact uppercase filename: UNIQUEFIELD_STUDENTNAME.PDF
+    with collision handling (_01, _02, ..., _100) and reserved name protection.
+    """
+    u = sanitize_filename_part(unique_val)
+    s = sanitize_filename_part(student_name)[:40].strip(" ._")
+    if not s:
+        s = "UNNAMED"
+
+    base_name = f"{u}_{s}".upper()
+
+    # Reserved names check
+    first_token = base_name.split("_")[0]
+    if first_token in RESERVED_WINDOWS_NAMES:
+        base_name = f"RESULT_{base_name}"
+
+    ext = ext.upper() if ext.startswith(".") else f".{ext.upper()}"
+
+    candidate_path = os.path.join(output_dir, f"{base_name}{ext}")
+    if not os.path.exists(candidate_path):
+        return candidate_path
+
+    # Collision loop with formatted padding (_01, _02, ... _100)
+    counter = 1
+    while True:
+        suffix = f"_{counter:02d}" if counter < 100 else f"_{counter}"
+        candidate_path = os.path.join(output_dir, f"{base_name}{suffix}{ext}")
+        if not os.path.exists(candidate_path):
+            return candidate_path
+        counter += 1
+
+
+def preview_filenames(
+    output_dir: str,
+    rows: list[dict[str, str]],
+    unique_col: str,
+    name_col: str,
+    ext: str = ".PDF",
+) -> list[tuple[int, str]]:
+    """
+    Generate accurate preview of final filenames.
+    For < 5 records, previews all.
+    For >= 5 records, previews the first 3 and last 2 records.
+    Returns: list of (row_1_indexed, filename_only)
+    """
+    total = len(rows)
+    if total == 0:
+        return []
+
+    if total < 5:
+        target_indices = list(range(total))
+    else:
+        target_indices = [0, 1, 2, total - 2, total - 1]
+
+    results: list[tuple[int, str]] = []
+    simulated_used_paths: set[str] = set()
+
+    for idx in target_indices:
+        row = rows[idx]
+        u = row.get(unique_col, f"REC{idx+1}")
+        s = row.get(name_col, "")
+
+        # Compute candidate
+        u_clean = sanitize_filename_part(u)
+        s_clean = sanitize_filename_part(s)[:40].strip(" ._") or "UNNAMED"
+        base = f"{u_clean}_{s_clean}".upper()
+        if base.split("_")[0] in RESERVED_WINDOWS_NAMES:
+            base = f"RESULT_{base}"
+        
+        ext_clean = ext.upper() if ext.startswith(".") else f".{ext.upper()}"
+        candidate = os.path.join(output_dir, f"{base}{ext_clean}")
+
+        if os.path.exists(candidate) or candidate in simulated_used_paths:
+            cnt = 1
+            while True:
+                suffix = f"_{cnt:02d}" if cnt < 100 else f"_{cnt}"
+                candidate = os.path.join(output_dir, f"{base}{suffix}{ext_clean}")
+                if not os.path.exists(candidate) and candidate not in simulated_used_paths:
+                    break
+                cnt += 1
+
+        simulated_used_paths.add(candidate)
+        results.append((idx + 1, os.path.basename(candidate)))
+
+    return results
+
+
+# ── Pre-generation System Checks ─────────────────────────────────────────────
+
+def check_pre_generation(
+    output_dir: str,
+    estimated_size_bytes: int = 10 * 1024 * 1024,
+) -> tuple[bool, str]:
+    """
+    Validates:
+    1. Output folder creation & accessibility.
+    2. Write permissions.
+    3. Disk space (+10% safety margin).
+    4. Path length safety.
+    """
+    if len(os.path.abspath(output_dir)) > 240:
+        return False, f"Target folder path is too long ({len(output_dir)} characters). Please select a shorter path."
+
     if not os.path.exists(output_dir):
         try:
             os.makedirs(output_dir, exist_ok=True)
-        except Exception as e:
-            return False, f"Could not create output directory: {e}"
+        except Exception as exc:
+            return False, f"Could not create destination directory: {exc}"
 
-    # Check write permissions
-    test_file = os.path.join(output_dir, ".write_test.tmp")
+    # Write access test
+    test_file = os.path.join(output_dir, f".write_test_{uuid.uuid4().hex[:8]}.tmp")
     try:
-        with open(test_file, "w") as f:
-            f.write("test")
+        with open(test_file, "w", encoding="utf-8") as f:
+            f.write("write_test")
         os.remove(test_file)
-    except Exception as e:
-        return False, f"Output directory is not writable: {e}"
+    except Exception as exc:
+        return False, f"Destination folder is not writable (Permission Denied): {exc}"
 
-    # Check disk space
+    # Disk space check with +10% safety margin
     try:
-        total, used, free = shutil.disk_usage(output_dir)
-        # Required size + 10% safety buffer
+        _, _, free = shutil.disk_usage(output_dir)
         required_space = int(estimated_size_bytes * 1.1)
         if free < required_space:
-            return False, f"Insufficient disk space. Free: {free // (1024*1024)} MB, Required: {required_space // (1024*1024)} MB"
-    except Exception as e:
-        return False, f"Failed to check disk space: {e}"
+            free_mb = free // (1024 * 1024)
+            req_mb = required_space // (1024 * 1024)
+            return False, (
+                f"Insufficient disk space in target drive.\n"
+                f"Available: {free_mb} MB\n"
+                f"Required (with 10% safety buffer): {req_mb} MB"
+            )
+    except Exception as exc:
+        return False, f"Failed to determine available disk space: {exc}"
 
     return True, ""
 
 
-def get_unique_filename(output_dir: str, base_name: str, ext: str = ".pdf") -> str:
-    """
-    Intelligent naming: Returns non-conflicting filepath by appending _1, _2, etc.
-    Handles Windows reserved names, invalid characters, and trailing dots/spaces.
-    """
-    # Sanitize base_name
-    safe_base = "".join(c for c in base_name if c.isalnum() or c in (" ", "_", "-")).strip(" .")
-    
-    # Windows reserved filenames check
-    reserved = {"CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", 
-                "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", 
-                "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"}
-    if not safe_base or safe_base.upper() in reserved:
-        safe_base = f"Result_{safe_base}" if safe_base else "Result"
-
-    candidate = os.path.join(output_dir, f"{safe_base}{ext}")
-    if not os.path.exists(candidate):
-        return candidate
-
-    counter = 1
-    while True:
-        candidate = os.path.join(output_dir, f"{safe_base}_{counter}{ext}")
-        if not os.path.exists(candidate):
-            return candidate
-        counter += 1
-
+# ── Color & Drawing Helpers ───────────────────────────────────────────────────
 
 def _hex_to_rgb_float(hex_str: str) -> tuple[float, float, float]:
-    """Convert hex string (#RRGGBB) to (r, g, b) with values in 0.0 - 1.0."""
-    hex_str = hex_str.lstrip("#")
-    if len(hex_str) == 6:
-        r = int(hex_str[0:2], 16) / 255.0
-        g = int(hex_str[2:4], 16) / 255.0
-        b = int(hex_str[4:6], 16) / 255.0
-        return (r, g, b)
+    """Convert hex (#RRGGBB) to (r, g, b) float values [0.0, 1.0].
+    Returns black (0, 0, 0) for any malformed or invalid hex string.
+    """
+    try:
+        hex_str = hex_str.lstrip("#")
+        if len(hex_str) == 6:
+            r = int(hex_str[0:2], 16) / 255.0
+            g = int(hex_str[2:4], 16) / 255.0
+            b = int(hex_str[4:6], 16) / 255.0
+            return (r, g, b)
+    except (ValueError, AttributeError):
+        pass
     return (0.0, 0.0, 0.0)
 
 
+# ── Single PDF Generator ─────────────────────────────────────────────────────
+
 def generate_single_pdf(
-    template_state: dict,
+    template_state: dict[str, Any],
     row_data: dict[str, str],
     output_path: str,
 ) -> None:
     """
-    Renders one single student record onto the template and saves the flattened PDF.
+    Renders one single student record onto the template background
+    and saves the resulting flattened PDF.
     """
     bg_info = template_state.get("background", {})
-    bg_type = bg_info.get("type", "")
     bg_path = bg_info.get("path", "")
-    canvas_info = template_state.get("canvas", {})
-    canvas_w = float(canvas_info.get("width", 794))
-    canvas_h = float(canvas_info.get("height", 1123))
+    bg_type = bg_info.get("type", "image")
+
+    canvas_w = float(template_state.get("canvas_width", 794.0))
+    canvas_h = float(template_state.get("canvas_height", 1123.0))
+
+    template_id = template_state.get("template_id", str(uuid.uuid4()))
 
     doc = pymupdf.open()
 
-    if bg_type == "pdf" and os.path.exists(bg_path):
-        bg_doc = pymupdf.open(bg_path)
-        doc.insert_pdf(bg_doc, from_page=0, to_page=0)
-        page = doc[0]
-        page_rect = page.rect
-        scale_x = page_rect.width / canvas_w
-        scale_y = page_rect.height / canvas_h
-    elif os.path.exists(bg_path):
-        # Image background or default blank page
-        page_rect = pymupdf.Rect(0, 0, canvas_w * 72.0 / 96.0, canvas_h * 72.0 / 96.0)
-        page = doc.new_page(width=page_rect.width, height=page_rect.height)
-        scale_x = page_rect.width / canvas_w
-        scale_y = page_rect.height / canvas_h
-        # Insert image
-        page.insert_image(page_rect, filename=bg_path)
+    if bg_path and os.path.exists(bg_path):
+        if bg_type == "pdf":
+            src_doc = pymupdf.open(bg_path)
+            doc.insert_pdf(src_doc, from_page=0, to_page=0)
+            src_doc.close()
+            page = doc[0]
+        else:
+            # High-res image background
+            page = doc.new_page(width=canvas_w, height=canvas_h)
+            rect = pymupdf.Rect(0, 0, canvas_w, canvas_h)
+            page.insert_image(rect, filename=bg_path)
     else:
-        # Blank canvas
-        page_rect = pymupdf.Rect(0, 0, canvas_w * 72.0 / 96.0, canvas_h * 72.0 / 96.0)
-        page = doc.new_page(width=page_rect.width, height=page_rect.height)
-        scale_x = page_rect.width / canvas_w
-        scale_y = page_rect.height / canvas_h
+        page = doc.new_page(width=canvas_w, height=canvas_h)
+
+    page_rect = page.rect
+    scale_x = page_rect.width / max(1.0, canvas_w)
+    scale_y = page_rect.height / max(1.0, canvas_h)
 
     # Stamp fields
     fields = template_state.get("fields", [])
-    for field in fields:
-        mapped_col = field.get("mapped_column") or field.get("label", "")
-        # Raw display only - pull string directly
-        val = row_data.get(mapped_col, "")
-        if not val:
-            # Check by label if mapped column was empty
-            val = row_data.get(field.get("label", ""), "")
+    for f in fields:
+        col_key = f.get("mapped_column") or f.get("label", "")
+        text_val = str(row_data.get(col_key, ""))
 
-        fx = float(field.get("x", 0)) * scale_x
-        fy = float(field.get("y", 0)) * scale_y
-        fw = float(field.get("width", 100)) * scale_x
-        fh = float(field.get("height", 30)) * scale_y
+        # Coordinates mapped to PDF points
+        x0 = float(f.get("x", 0.0)) * scale_x
+        y0 = float(f.get("y", 0.0)) * scale_y
+        w  = float(f.get("width", 100.0)) * scale_x
+        h  = float(f.get("height", 30.0)) * scale_y
+        box_rect = pymupdf.Rect(x0, y0, x0 + w, y0 + h)
 
-        target_rect = pymupdf.Rect(fx, fy, fx + fw, fy + fh)
-        font_size = float(field.get("font_size", 12)) * scale_y
-        color = _hex_to_rgb_float(field.get("color", "#000000"))
-        align_str = field.get("alignment", "Left")
-        
-        # PyMuPDF alignment: 0=Left, 1=Center, 2=Right
-        align_val = 0
+        font_size = float(f.get("font_size", 12)) * min(scale_x, scale_y)
+        color = _hex_to_rgb_float(f.get("color", "#000000"))
+
+        align_str = f.get("alignment", "Left")
+        align_code = 0  # Left
         if align_str == "Center":
-            align_val = 1
+            align_code = 1
         elif align_str == "Right":
-            align_val = 2
+            align_code = 2
 
-        # Insert textbox (pymupdf handles bounding & alignment)
+        font_name = "helv"
+        bold = f.get("bold", False)
+        italic = f.get("italic", False)
+        if bold and italic:
+            font_name = "hebi"
+        elif bold:
+            font_name = "hebo"
+        elif italic:
+            font_name = "heit"
+
+        # Insert textbox with PyMuPDF
         page.insert_textbox(
-            target_rect,
-            str(val),
+            box_rect,
+            text_val,
             fontsize=font_size,
+            fontname=font_name,
             color=color,
-            align=align_val,
+            align=align_code,
         )
 
-    # Flatten / save
-    doc.save(output_path, deflate=True)
+    # Stamp internal template identity in metadata
+    doc.set_metadata({
+        "keywords": f"TeacherResultSoftware:{template_id}",
+        "producer": "TeacherResultSoftware Desktop Engine",
+    })
+
+    doc.save(output_path, garbage=4, deflate=True)
     doc.close()
 
 
+# ── Generator Worker (QThread) ───────────────────────────────────────────────
+
 class GeneratorWorker(QThread):
     """
-    Background worker thread to perform batch PDF generation.
-    Supports pause/resume when empty cell error occurs.
+    Multithreaded generation worker with interactive error pause,
+    per-record retry limit (max 3), recovery state saving, and cancellation cleanup.
     """
-    progress_updated = pyqtSignal(int, int, str)  # current, total, current_filename
-    error_occurred = pyqtSignal(int, str, dict)   # row_idx (1-based), column_name, row_dict
-    generation_finished = pyqtSignal(int, int)     # success_count, skipped_count
-    generation_aborted = pyqtSignal(str)          # reason
 
-    # Actions user can choose on error
+    # Signals
+    progress = pyqtSignal(int, int, int, str, str)  # current, total, percent, filename, status
+    record_succeeded = pyqtSignal(int, str)         # row_idx, file_path
+    record_skipped = pyqtSignal(int, str)           # row_idx, reason
+    error_occurred = pyqtSignal(int, str, dict, int) # row_idx, col_name, row_dict, retries_left
+    generation_finished = pyqtSignal(int, int, int, str, list)  # gen, skip, fail, out_dir, failed_records
+    generation_cancelled = pyqtSignal()
+
     ACTION_RETRY = 1
     ACTION_SKIP = 2
     ACTION_CANCEL = 3
 
     def __init__(
         self,
-        template_state: dict,
+        template_state: dict[str, Any],
         rows: list[dict[str, str]],
         output_dir: str,
-        name_column: str = "",
+        unique_col: str,
+        name_col: str,
         parent: QObject | None = None,
+        operation_id: str | None = None,
     ) -> None:
         super().__init__(parent)
         self.template_state = template_state
         self.rows = rows
         self.output_dir = output_dir
-        self.name_column = name_column
+        self.unique_col = unique_col
+        self.name_col = name_col
+        self.operation_id = operation_id or uuid.uuid4().hex[:12]
 
-        self._is_cancelled = False
+        self._cancelled = False
         self._mutex = QMutex()
         self._wait_condition = QWaitCondition()
-        self._user_action: int = self.ACTION_RETRY
+        self._error_action = self.ACTION_SKIP
 
-    def cancel(self):
+        self.retry_counts: dict[int, int] = {}
+        self.generated_files: list[str] = []
+        self.failed_records: list[dict[str, Any]] = []
+
+        self.recovery_file = os.path.join(
+            RECOVERY_DIR, f"recovery_{self.operation_id}.json"
+        )
+
+    def cancel(self) -> None:
+        """Signal thread to cancel and clean up."""
         self._mutex.lock()
-        self._is_cancelled = True
+        self._cancelled = True
+        self._error_action = self.ACTION_CANCEL
         self._wait_condition.wakeAll()
         self._mutex.unlock()
 
-    def resolve_error(self, action: int):
-        """Called by UI thread to provide the action to resume generation."""
+    def resolve_error(self, action: int) -> None:
+        """Called by UI to wake worker thread after user interaction."""
         self._mutex.lock()
-        self._user_action = action
+        self._error_action = action
         self._wait_condition.wakeAll()
         self._mutex.unlock()
 
-    def run(self):
+    def _save_recovery_state(self, current_idx: int, completed: int, skipped: int, failed: int) -> None:
+        """Persist recovery state to disk."""
+        state = {
+            "operation_id": self.operation_id,
+            "template_id": self.template_state.get("template_id", ""),
+            "output_dir": self.output_dir,
+            "current_index": current_idx,
+            "completed_count": completed,
+            "skipped_count": skipped,
+            "failed_count": failed,
+            "retry_counts": self.retry_counts,
+            "generated_files": self.generated_files,
+            "failed_records": self.failed_records,
+        }
+        try:
+            with open(self.recovery_file, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=2)
+        except Exception:
+            pass
+
+    def run(self) -> None:
         total = len(self.rows)
-        success_count = 0
+        generated_count = 0
         skipped_count = 0
 
-        # Get list of required mapped columns from template
-        required_cols = []
-        for field in self.template_state.get("fields", []):
-            col = field.get("mapped_column") or field.get("label", "")
-            if col and col not in required_cols:
-                required_cols.append(col)
+        # Scan mapped columns to validate
+        mapped_columns: list[str] = []
+        for f in self.template_state.get("fields", []):
+            c = f.get("mapped_column") or f.get("label", "")
+            if c:
+                mapped_columns.append(c)
 
-        row_idx = 0
-        while row_idx < total:
-            self._mutex.lock()
-            if self._is_cancelled:
-                self._mutex.unlock()
-                self.generation_aborted.emit("Generation was cancelled by user.")
+        idx = 0
+        while idx < total:
+            if self._cancelled:
+                self._cleanup_on_cancel()
+                self.generation_cancelled.emit()
                 return
-            self._mutex.unlock()
 
-            row = self.rows[row_idx]
-            
-            # Check for missing/empty values in required mapped columns
-            missing_col = None
-            for col in required_cols:
+            row = self.rows[idx]
+            row_num = idx + 1
+            retries_used = self.retry_counts.get(idx, 0)
+            retries_left = max(0, 3 - retries_used)
+
+            # Check for empty cells in mapped fields
+            missing_col = ""
+            for col in mapped_columns:
                 val = row.get(col, "")
-                if not val or not str(val).strip():
+                if val is None or str(val).strip() == "":
                     missing_col = col
                     break
 
             if missing_col:
-                # Emit error and pause thread until UI responds
-                self.error_occurred.emit(row_idx + 1, missing_col, row)
-                
+                # Pause and notify UI
                 self._mutex.lock()
+                self.error_occurred.emit(row_num, missing_col, row, retries_left)
                 self._wait_condition.wait(self._mutex)
-                action = self._user_action
+                action = self._error_action
                 self._mutex.unlock()
 
-                if action == self.ACTION_CANCEL or self._is_cancelled:
-                    self.generation_aborted.emit("Generation stopped due to missing data.")
+                if action == self.ACTION_CANCEL or self._cancelled:
+                    self._cleanup_on_cancel()
+                    self.generation_cancelled.emit()
                     return
                 elif action == self.ACTION_SKIP:
                     skipped_count += 1
-                    row_idx += 1
+                    self.record_skipped.emit(row_num, f"Empty cell in '{missing_col}'")
+                    idx += 1
                     continue
                 elif action == self.ACTION_RETRY:
-                    # Will retry this same row index
+                    self.retry_counts[idx] = retries_used + 1
+                    if self.retry_counts[idx] >= 3:
+                        # Exceeded retry limit
+                        self.failed_records.append({
+                            "student_name": row.get(self.name_col, "Unknown"),
+                            "unique_val": row.get(self.unique_col, f"Row {row_num}"),
+                            "error": f"Missing value in '{missing_col}' (Max retries exceeded)",
+                            "row_data": row,
+                            "row_index": idx,
+                        })
+                        skipped_count += 1
+                        idx += 1
                     continue
 
-            # Determine file base name
-            base_name = ""
-            if self.name_column and self.name_column in row:
-                base_name = str(row[self.name_column]).strip()
-            if not base_name:
-                base_name = f"Result_Row_{row_idx + 1}"
+            # Construct safe filename
+            u_val = row.get(self.unique_col, f"REC{row_num}")
+            s_val = row.get(self.name_col, "")
+            out_file = get_unique_result_filename(self.output_dir, u_val, s_val, ".PDF")
+            filename_only = os.path.basename(out_file)
 
-            out_file = get_unique_filename(self.output_dir, base_name)
-            filename = os.path.basename(out_file)
-
-            self.progress_updated.emit(row_idx + 1, total, filename)
+            # Update progress
+            pct = int((generated_count / total) * 100) if total > 0 else 0
+            self.progress.emit(
+                row_num, total, pct, filename_only, f"Generating {row_num}/{total}..."
+            )
 
             try:
                 generate_single_pdf(self.template_state, row, out_file)
-                success_count += 1
-            except Exception as e:
-                self.generation_aborted.emit(f"Error writing PDF ({filename}): {e}")
-                return
+                self.generated_files.append(out_file)
+                generated_count += 1
+                self.record_succeeded.emit(row_num, out_file)
+                idx += 1
+            except Exception as exc:
+                self._mutex.lock()
+                self.error_occurred.emit(row_num, f"Render Error: {exc}", row, retries_left)
+                self._wait_condition.wait(self._mutex)
+                action = self._error_action
+                self._mutex.unlock()
 
-            row_idx += 1
+                if action == self.ACTION_CANCEL or self._cancelled:
+                    self._cleanup_on_cancel()
+                    self.generation_cancelled.emit()
+                    return
+                elif action == self.ACTION_SKIP:
+                    skipped_count += 1
+                    self.failed_records.append({
+                        "student_name": row.get(self.name_col, "Unknown"),
+                        "unique_val": row.get(self.unique_col, f"Row {row_num}"),
+                        "error": str(exc),
+                        "row_data": row,
+                        "row_index": idx,
+                    })
+                    idx += 1
+                elif action == self.ACTION_RETRY:
+                    self.retry_counts[idx] = retries_used + 1
+                    if self.retry_counts[idx] >= 3:
+                        self.failed_records.append({
+                            "student_name": row.get(self.name_col, "Unknown"),
+                            "unique_val": row.get(self.unique_col, f"Row {row_num}"),
+                            "error": f"{exc} (Max retries exceeded)",
+                            "row_data": row,
+                            "row_index": idx,
+                        })
+                        skipped_count += 1
+                        idx += 1
 
-        self.generation_finished.emit(success_count, skipped_count)
+            self._save_recovery_state(idx, generated_count, skipped_count, len(self.failed_records))
+
+        # Successful completion -> remove recovery file
+        if os.path.exists(self.recovery_file):
+            try:
+                os.remove(self.recovery_file)
+            except Exception:
+                pass
+
+        final_pct = 100 if generated_count == total else int((generated_count / total) * 100)
+        self.progress.emit(
+            total, total, final_pct, "Completed", "Generation Finished"
+        )
+        self.generation_finished.emit(
+            generated_count,
+            skipped_count,
+            len(self.failed_records),
+            self.output_dir,
+            self.failed_records,
+        )
+
+    def _cleanup_on_cancel(self) -> None:
+        """On confirmed cancellation, attempt to remove generated files for this session."""
+        for path in self.generated_files:
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except Exception:
+                pass
+        if os.path.exists(self.recovery_file):
+            try:
+                os.remove(self.recovery_file)
+            except Exception:
+                pass

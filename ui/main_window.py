@@ -1,59 +1,63 @@
+﻿"""
+ui/main_window.py
+Top-level application window, navigation routing, operation coordination, and lifecycle management.
 """
-Main application window.
+from __future__ import annotations
 
-Layout
-------
-QMainWindow
-└── central QWidget
-    └── QHBoxLayout (no margins)
-        ├── Sidebar  (QWidget, fixed width)
-        │   ├── App logo / title
-        │   ├── Nav buttons (Dashboard, Template Editor, Settings)
-        │   └── Version label (bottom)
-        └── QStackedWidget  (content area)
-"""
+import os
+
+from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtGui import QFont, QIcon
 from PyQt6.QtWidgets import (
-    QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
-    QLabel, QPushButton, QStackedWidget, QMessageBox,
-    QSizePolicy, QSpacerItem,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
 )
-from PyQt6.QtCore import Qt, QSize
-from PyQt6.QtGui import QIcon, QFont
 
+from generation.pdf_generator import GeneratorWorker
+from generation.printer import print_all_student_records
+from ui.dialogs.generation_dialog import (
+    GenerationCompletedDialog,
+    GenerationProgressDialog,
+    GenerationSetupDialog,
+)
+from ui.dialogs.print_one_dialog import PrintOneDialog
 from ui.views.dashboard_view import DashboardView
-from ui.views.template_editor_view import TemplateEditorView
 from ui.views.settings_view import SettingsView
-from ui.dialogs.generation_dialog import GenerationSetupDialog, GenerationProgressDialog
+from ui.views.template_editor_view import TemplateEditorView
 from utils.constants import APP_NAME
 
-# ── Palette ────────────────────────────────────────────────────────────────
-SIDEBAR_BG      = "#1a1a2e"
-SIDEBAR_HOVER   = "#16213e"
-SIDEBAR_ACTIVE  = "#4f7ef8"
-SIDEBAR_TEXT    = "#c8cde4"
-SIDEBAR_TEXT_ACT= "#ffffff"
-CONTENT_BG      = "#f3f4f8"
+# ── Colors ─────────────────────────────────────────────────────────────────
+SIDEBAR_BG       = "#1a1a2e"
+SIDEBAR_HOVER    = "#16213e"
+SIDEBAR_ACTIVE   = "#4f7ef8"
+SIDEBAR_TEXT     = "#c8cde4"
+SIDEBAR_TEXT_ACT = "#ffffff"
+CONTENT_BG       = "#f3f4f8"
 
 
 class MainWindow(QMainWindow):
-    """Top-level application window."""
+    """Top-level application window coordinating all views and background jobs."""
 
-    # ── Lifecycle ─────────────────────────────────────────────────────────────
-
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
 
         self.setWindowTitle(APP_NAME)
-        self.setMinimumSize(1024, 680)
-        self.resize(1200, 750)
+        self.setMinimumSize(1080, 720)
+        self.resize(1240, 780)
 
         self._nav_buttons: list[QPushButton] = []
         self._build_ui()
-        self._navigate(0)   # start on Dashboard
+        self._navigate(0)  # Start on Dashboard
 
-    # ── UI construction ───────────────────────────────────────────────────────
+    # ── UI Construction ───────────────────────────────────────────────────────
 
-    def _build_ui(self):
+    def _build_ui(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
 
@@ -64,139 +68,180 @@ class MainWindow(QMainWindow):
         root.addWidget(self._build_sidebar())
         root.addWidget(self._build_content_area())
 
-    # ── Sidebar ───────────────────────────────────────────────────────────────
-
     def _build_sidebar(self) -> QWidget:
         sidebar = QWidget()
         sidebar.setObjectName("Sidebar")
-        sidebar.setFixedWidth(220)
+        sidebar.setFixedWidth(230)
         sidebar.setStyleSheet(f"QWidget#Sidebar {{ background-color: {SIDEBAR_BG}; }}")
 
         layout = QVBoxLayout(sidebar)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # ── Logo / app name ───────────────────────────────────────────────
+        # Logo / Title
         logo_area = QWidget()
-        logo_area.setFixedHeight(80)
+        logo_area.setFixedHeight(84)
         logo_area.setStyleSheet(f"background-color: {SIDEBAR_BG};")
         logo_layout = QVBoxLayout(logo_area)
         logo_layout.setContentsMargins(20, 0, 20, 0)
         logo_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        app_label = QLabel("📋  Result Manager")
+        app_label = QLabel("📋  Teacher Results")
         app_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         app_label.setStyleSheet("""
             color: #ffffff;
-            font-size: 14px;
+            font-size: 15px;
             font-weight: 700;
             letter-spacing: 0.5px;
         """)
+        sub_label = QLabel("Offline Result Engine")
+        sub_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sub_label.setStyleSheet("color: #94a3b8; font-size: 11px;")
+
         logo_layout.addWidget(app_label)
+        logo_layout.addWidget(sub_label)
         layout.addWidget(logo_area)
 
-        # ── Separator line ────────────────────────────────────────────────
+        # Divider
         sep = QWidget()
         sep.setFixedHeight(1)
-        sep.setStyleSheet(f"background-color: #2a2d4a;")
+        sep.setStyleSheet("background-color: #2a2d4a;")
         layout.addWidget(sep)
 
-        layout.addSpacing(12)
+        layout.addSpacing(16)
 
-        # ── Nav buttons ───────────────────────────────────────────────────
+        # Nav Buttons
         nav_items = [
-            ("  Dashboard",       "📊"),
-            ("  Template Editor", "🖊️"),
-            ("  Settings",        "⚙️"),
+            ("📊", "Dashboard"),
+            ("🎨", "Template Editor"),
+            ("⚙️", "Settings"),
         ]
-        for index, (label, icon) in enumerate(nav_items):
-            btn = self._make_nav_button(f"{icon}{label}", index)
+
+        for i, (icon, text) in enumerate(nav_items):
+            btn = self._make_nav_button(icon, text, i)
             self._nav_buttons.append(btn)
             layout.addWidget(btn)
 
-        # ── Bottom spacer + version ───────────────────────────────────────
         layout.addStretch()
 
-        ver = QLabel("v1.0.0")
-        ver.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        ver.setFixedHeight(36)
-        ver.setStyleSheet(f"color: #4a4f72; font-size: 11px;")
-        layout.addWidget(ver)
+        # Footer
+        footer = QWidget()
+        footer.setFixedHeight(50)
+        foot_layout = QVBoxLayout(footer)
+        foot_layout.setContentsMargins(20, 0, 20, 10)
+        ver = QLabel("v1.0.0 • Offline Release")
+        ver.setStyleSheet("color: #4a4f72; font-size: 11px;")
+        foot_layout.addWidget(ver)
+        layout.addWidget(footer)
 
         return sidebar
 
-    def _make_nav_button(self, text: str, index: int) -> QPushButton:
-        btn = QPushButton(text)
+    def _make_nav_button(self, icon: str, text: str, index: int) -> QPushButton:
+        btn = QPushButton(f"  {icon}   {text}")
+        btn.setFixedHeight(46)
         btn.setCheckable(True)
-        btn.setFixedHeight(48)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: transparent;
                 color: {SIDEBAR_TEXT};
                 border: none;
-                border-left: 3px solid transparent;
+                border-left: 4px solid transparent;
+                padding-left: 20px;
                 text-align: left;
-                padding-left: 22px;
-                font-size: 14px;
+                font-size: 13px;
                 font-weight: 500;
             }}
             QPushButton:hover {{
                 background-color: {SIDEBAR_HOVER};
-                color: {SIDEBAR_TEXT_ACT};
+                color: #ffffff;
             }}
             QPushButton:checked {{
                 background-color: {SIDEBAR_HOVER};
-                border-left: 3px solid {SIDEBAR_ACTIVE};
                 color: {SIDEBAR_TEXT_ACT};
+                border-left: 4px solid {SIDEBAR_ACTIVE};
                 font-weight: 600;
             }}
         """)
-        btn.clicked.connect(lambda _, i=index: self._navigate(i))
+        btn.clicked.connect(lambda: self._navigate(index))
         return btn
 
-    # ── Content area ──────────────────────────────────────────────────────────
-
-    def _build_content_area(self) -> QStackedWidget:
+    def _build_content_area(self) -> QWidget:
         self._stack = QStackedWidget()
         self._stack.setStyleSheet(f"background-color: {CONTENT_BG};")
 
-        self._dashboard_view       = DashboardView()
-        self._template_editor_view = TemplateEditorView()
-        self._settings_view        = SettingsView()
+        self._dashboard_view = DashboardView(self)
+        self._template_editor_view = TemplateEditorView(self)
+        self._settings_view = SettingsView(self)
 
-        self._stack.addWidget(self._dashboard_view)        # index 0
-        self._stack.addWidget(self._template_editor_view)  # index 1
-        self._stack.addWidget(self._settings_view)         # index 2
+        self._stack.addWidget(self._dashboard_view)
+        self._stack.addWidget(self._template_editor_view)
+        self._stack.addWidget(self._settings_view)
 
-        # Forward Excel headers to the Template Editor automatically
-        self._dashboard_view.excel_loaded.connect(
-            self._template_editor_view.set_excel_headers
-        )
-
-        # Trigger batch generation
-        self._dashboard_view.generate_requested.connect(
-            self._on_trigger_batch_generation
-        )
+        # Wire cross-view events
+        self._dashboard_view.excel_loaded.connect(self._on_excel_loaded)
+        self._dashboard_view.dataset_cleared.connect(self._on_dataset_cleared)
+        self._dashboard_view.print_one_requested.connect(self._on_print_one)
+        self._dashboard_view.print_all_requested.connect(self._on_print_all)
+        self._dashboard_view.generate_requested.connect(self._on_generate_all)
 
         return self._stack
 
-    def _on_trigger_batch_generation(self):
-        excel_data = self._dashboard_view.get_excel_data()
-        if not excel_data or not excel_data.get("rows"):
-            QMessageBox.warning(
-                self,
-                "No Data Loaded",
-                "Please load an Excel file with student records first."
-            )
+    # ── Cross-View Coordination ───────────────────────────────────────────────
+
+    def _on_excel_loaded(self, headers: list[str]) -> None:
+        self._template_editor_view.set_excel_columns(headers)
+        self._template_editor_view.set_locked_state(True, "Template locked while active dataset is loaded")
+
+    def _on_dataset_cleared(self) -> None:
+        self._template_editor_view.set_locked_state(False)
+
+    def _on_print_one(self) -> None:
+        template_state = self._template_editor_view.get_state()
+        if not template_state.get("fields"):
+            QMessageBox.warning(self, "No Template Fields", "Please place at least one field in the Template Editor before printing.")
             return
 
-        template_state = self._template_editor_view.get_template_state()
-        fields = template_state.get("fields", [])
-        if not fields:
+        headers, rows = self._dashboard_view.get_dataset()
+        if not rows:
+            QMessageBox.warning(self, "No Data", "Please load a student dataset first.")
+            return
+
+        dlg = PrintOneDialog(template_state, headers, rows, self)
+        dlg.exec()
+
+    def _on_print_all(self) -> None:
+        template_state = self._template_editor_view.get_state()
+        if not template_state.get("fields"):
+            QMessageBox.warning(self, "No Template Fields", "Please place at least one field in the Template Editor before printing.")
+            return
+
+        headers, rows = self._dashboard_view.get_dataset()
+        if not rows:
+            QMessageBox.warning(self, "No Data", "Please load a student dataset first.")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Confirm Batch Print",
+            f"Are you sure you want to send all {len(rows)} student result papers to the printer?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            printed, failed = print_all_student_records(template_state, rows, self)
+            QMessageBox.information(
+                self,
+                "Printing Finished",
+                f"Batch Print Results:\n• Successfully Spooled: {printed}\n• Failed: {failed}",
+            )
+
+    def _on_generate_all(self) -> None:
+        template_state = self._template_editor_view.get_state()
+        if not template_state.get("fields"):
             res = QMessageBox.question(
                 self,
-                "No Template Fields Configured",
+                "No Fields Configured",
                 "Your template currently has no text fields placed.\n\n"
                 "Would you like to switch to the Template Editor to configure fields first?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -205,51 +250,70 @@ class MainWindow(QMainWindow):
                 self._navigate(1)
             return
 
-        # Check background
         bg_path = template_state.get("background", {}).get("path", "")
         if not bg_path or not os.path.exists(bg_path):
             QMessageBox.warning(
                 self,
                 "Missing Background",
                 "The template has no background image/PDF or the file path is invalid.\n\n"
-                "Please configure a valid background in the Template Editor."
+                "Please configure a valid background in the Template Editor.",
             )
             self._navigate(1)
             return
 
-        # 1. Setup dialog (Folder selection, naming column, permission/disk checks)
-        headers = excel_data.get("headers", [])
-        rows = excel_data.get("rows", [])
-        setup_dlg = GenerationSetupDialog(headers, len(rows), self)
+        headers, rows = self._dashboard_view.get_dataset()
+        if not rows:
+            QMessageBox.warning(self, "No Data", "Please load an Excel dataset first.")
+            return
+
+        # 1. Setup Dialog
+        setup_dlg = GenerationSetupDialog(
+            template_state.get("template_name", "Result"),
+            headers,
+            rows,
+            self,
+        )
         if setup_dlg.exec() != GenerationSetupDialog.DialogCode.Accepted:
             return
 
-        out_dir = setup_dlg.selected_output_dir
-        name_col = setup_dlg.selected_name_col
+        out_dir = setup_dlg.selected_dir
+        u_col = setup_dlg.unique_column
+        n_col = setup_dlg.name_column
 
-        # 2. Progress dialog & Execution
-        prog_dlg = GenerationProgressDialog(
+        # 2. Worker Thread & Live Dashboard
+        worker = GeneratorWorker(
             template_state=template_state,
             rows=rows,
             output_dir=out_dir,
-            name_column=name_col,
+            unique_col=u_col,
+            name_col=n_col,
             parent=self,
         )
-        prog_dlg.start()
 
+        prog_dlg = GenerationProgressDialog(worker, len(rows), self)
+        worker.start()
 
+        if prog_dlg.exec() == GenerationProgressDialog.DialogCode.Accepted:
+            # 3. Completion Summary Dialog
+            comp_dlg = GenerationCompletedDialog(
+                generated=prog_dlg.generated_count,
+                skipped=prog_dlg.skipped_count,
+                failed=prog_dlg.failed_count,
+                output_dir=prog_dlg.output_directory,
+                failed_records=prog_dlg.failed_records,
+                template_state=template_state,
+                parent=self,
+            )
+            comp_dlg.exec()
 
-    # ── Navigation ────────────────────────────────────────────────────────────
+    # ── Navigation & Close Event ───────────────────────────────────────────────
 
-    def _navigate(self, index: int):
-        """Switch the active page and update sidebar button states."""
+    def _navigate(self, index: int) -> None:
         self._stack.setCurrentIndex(index)
         for i, btn in enumerate(self._nav_buttons):
             btn.setChecked(i == index)
 
-    # ── Close event ───────────────────────────────────────────────────────────
-
-    def closeEvent(self, event):
+    def closeEvent(self, event) -> None:
         if not hasattr(self, "_template_editor_view") or not self._template_editor_view.has_unsaved_changes():
             event.accept()
             return
@@ -260,23 +324,21 @@ class MainWindow(QMainWindow):
         msg.setInformativeText("Do you want to save before closing?")
         msg.setIcon(QMessageBox.Icon.Warning)
 
-        save_btn     = msg.addButton("Save",       QMessageBox.ButtonRole.AcceptRole)
-        no_save_btn  = msg.addButton("Don't Save", QMessageBox.ButtonRole.DestructiveRole)
-        cancel_btn   = msg.addButton("Cancel",     QMessageBox.ButtonRole.RejectRole)
+        save_btn    = msg.addButton("Save",       QMessageBox.ButtonRole.AcceptRole)
+        no_save_btn = msg.addButton("Don't Save", QMessageBox.ButtonRole.DestructiveRole)
+        cancel_btn  = msg.addButton("Cancel",     QMessageBox.ButtonRole.RejectRole)
 
         msg.setDefaultButton(save_btn)
         msg.exec()
 
         clicked = msg.clickedButton()
-
         if clicked == save_btn:
-            saved = self._template_editor_view.save_template()
+            saved = self._template_editor_view._on_save_template()
             if saved:
                 event.accept()
             else:
                 event.ignore()
         elif clicked == no_save_btn:
             event.accept()
-        else:                  # Cancel or dialog closed
+        else:
             event.ignore()
-

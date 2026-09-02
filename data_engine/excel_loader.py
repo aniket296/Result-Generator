@@ -1,189 +1,185 @@
 ﻿"""
-Excel ingestion module.
+data_engine/excel_loader.py
+Loads, validates, exports, and backs up Excel datasets.
 
-Public API
-----------
-load_excel(filepath)        -> dict  (headers, rows, total_rows)
-validate_row(row, index)    -> list[str]   (empty = valid)
-validate_all_rows(rows)     -> dict  (is_valid, error_count, errors_by_row)
-
-Architecture note
------------------
-This module is a pure data layer.  It NEVER calculates, derives, or modifies
-cell values.  Every cell is stored as the exact string from Excel.
-Empty cells are stored as "" so the caller can detect and surface them as
-critical errors.
+Key guarantees:
+- Strict string loading (no float conversion, no formula evaluation).
+- Dual-layer file-locking detection.
+- Empty cell validation (empty cells are critical errors).
+- Unique field constraint enforcement.
+- Export of blank Excel template matching template fields.
+- External `.dataset.backup` creation and recovery.
 """
 from __future__ import annotations
 
+import json
 import os
+from typing import Any
 
+import openpyxl
+from openpyxl.styles import Alignment, Font, PatternFill
 import pandas as pd
 
-from .exceptions import FileLockedError
+from data_engine.exceptions import (
+    DuplicateUniqueValueError,
+    EmptyCellError,
+    FileLockedError,
+)
 
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
 
+def _check_file_locked(file_path: str) -> None:
+    """Check if the Excel file is currently open / locked by another process."""
+    if not os.path.exists(file_path):
+        return
 
-def _check_file_locked(filepath: str) -> None:
-    """
-    Raise FileLockedError if the file is locked by another process.
+    dir_name = os.path.dirname(os.path.abspath(file_path))
+    base_name = os.path.basename(file_path)
+    shadow_lock = os.path.join(dir_name, f"~${base_name}")
 
-    Two independent checks are performed so that both Excel-style shadow
-    locks and generic OS write-locks are caught:
-
-    Check 1 – Shadow file
-        Microsoft Excel creates a hidden companion file named
-        "~$<original_filename>" in the same directory while the workbook
-        is open.  If that file exists, the workbook is locked by Excel.
-
-    Check 2 – Exclusive write-open
-        Attempt to open the file in read-write binary mode.  If another
-        process holds an exclusive write-lock, this raises PermissionError.
-    """
-    abs_path  = os.path.abspath(filepath)
-    directory = os.path.dirname(abs_path)
-    basename  = os.path.basename(abs_path)
-
-    # --- Check 1: Excel shadow lock file ------------------------------------
-    shadow = os.path.join(directory, f"~${basename}")
-    if os.path.exists(shadow):
+    if os.path.exists(shadow_lock):
         raise FileLockedError(
-            f"Microsoft Excel has this file open.\n\n"
-            f"Lock file detected:\n{shadow}\n\n"
-            f"Please close the workbook in Excel and try again."
+            f"The file '{base_name}' is currently open in Microsoft Excel or another program.\n"
+            "Please close the file and try again."
         )
 
-    # --- Check 2: OS-level write-lock --------------------------------------
     try:
-        with open(abs_path, "r+b"):
+        with open(file_path, "a+b"):
             pass
-    except PermissionError:
+    except (PermissionError, IOError) as exc:
         raise FileLockedError(
-            f"The file is locked by another program:\n{abs_path}\n\n"
-            f"Please close any application currently using this file."
+            f"The file '{base_name}' is locked by another process (Permission Denied).\n"
+            "Please close any application using it and try again."
+        ) from exc
+
+
+def load_excel(file_path: str) -> tuple[list[str], list[dict[str, str]]]:
+    """
+    Load an Excel (.xlsx / .xls) file.
+
+    Returns:
+        tuple[list[str], list[dict[str, str]]]:
+            (column_headers, rows_as_string_dicts)
+    """
+    _check_file_locked(file_path)
+
+    try:
+        df = pd.read_excel(
+            file_path,
+            dtype=str,
+            keep_default_na=False,
+            engine="openpyxl",
         )
+    except Exception as exc:
+        if isinstance(exc, FileLockedError):
+            raise
+        raise IOError(f"Failed to read Excel file: {exc}") from exc
+
+    headers: list[str] = [str(col).strip() for col in df.columns]
+    df.columns = headers
+
+    # Convert all cell values strictly to string
+    records: list[dict[str, str]] = []
+    for _, row in df.iterrows():
+        records.append({str(k): ("" if pd.isna(v) else str(v).strip()) for k, v in row.items()})
+
+    return headers, records
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
+def validate_row(row_dict: dict[str, str], row_num: int) -> None:
+    """Validate that a row contains no empty or whitespace-only cells."""
+    for col, val in row_dict.items():
+        if val is None or str(val).strip() == "":
+            raise EmptyCellError(row_num, col)
 
 
-def load_excel(filepath: str) -> dict:
-    """
-    Load an .xlsx/.xls file and return a structured result dict.
-
-    Parameters
-    ----------
-    filepath : str
-        Absolute or relative path to the workbook.
-
-    Returns
-    -------
-    dict with keys:
-        filepath    : str
-        headers     : list[str]            – column names from row 1
-        rows        : list[dict[str, str]] – one dict per data row;
-                                             empty cells stored as ""
-        total_rows  : int
-
-    Raises
-    ------
-    FileLockedError
-        File is open in another program.
-    ValueError
-        File has no columns or is completely empty.
-    Any pandas / openpyxl exception
-        Propagated as-is for the UI to surface.
-    """
-    _check_file_locked(filepath)
-
-    df = pd.read_excel(
-        filepath,
-        engine="openpyxl",
-        dtype=str,              # treat every cell as a raw string
-        keep_default_na=False,  # empty cells -> "" not NaN
-    )
-
-    if df.columns.empty:
-        raise ValueError(f"No columns found in file:\n{filepath}")
-
-    # Strip any accidental leading/trailing whitespace from header names
-    df.columns = [str(col).strip() for col in df.columns]
-    headers: list[str] = df.columns.tolist()
-
-    # Build row dicts; strip whitespace from cell content
-    rows: list[dict[str, str]] = []
-    for _, pd_row in df.iterrows():
-        row_dict: dict[str, str] = {col: str(pd_row[col]).strip() for col in headers}
-        rows.append(row_dict)
-
-    return {
-        "filepath"  : filepath,
-        "headers"   : headers,
-        "rows"      : rows,
-        "total_rows": len(rows),
-    }
-
-
-def validate_row(row: dict, row_index: int) -> list[str]:
-    """
-    Check a single data row for empty or blank cells.
-
-    Parameters
-    ----------
-    row       : dict[str, str]  as returned inside load_excel()["rows"]
-    row_index : int             0-based index within the dataset
-
-    Returns
-    -------
-    List of human-readable error strings.
-    An empty list means the row is fully populated (valid).
-    """
-    errors: list[str] = []
-    human_row = row_index + 1  # convert to 1-based for display
-
-    for column, value in row.items():
-        if not value or not value.strip():
-            errors.append(
-                f"Row {human_row}, Column \"{column}\": "
-                f"cell is empty. Empty cells are not allowed during generation."
-            )
-
+def validate_all_rows(rows: list[dict[str, str]]) -> list[tuple[int, str]]:
+    """Scan all rows for empty cells. Returns list of (row_num_1_indexed, column_name)."""
+    errors: list[tuple[int, str]] = []
+    for idx, row in enumerate(rows, start=1):
+        for col, val in row.items():
+            if val is None or str(val).strip() == "":
+                errors.append((idx, col))
     return errors
 
 
-def validate_all_rows(rows: list[dict], *, stop_on_first: bool = False) -> dict:
+def validate_unique_column(rows: list[dict[str, str]], col_name: str) -> None:
     """
-    Validate every row in the dataset.
-
-    Parameters
-    ----------
-    rows          : list[dict]  as returned by load_excel()["rows"]
-    stop_on_first : bool        stop scanning after the first invalid row
-
-    Returns
-    -------
-    dict with keys:
-        is_valid      : bool
-        error_count   : int   (total number of empty cells across all rows)
-        errors_by_row : dict[int, list[str]]
-                        maps 0-based row index to its list of error strings
+    Verify that all values in the designated unique column are distinct.
+    Raises DuplicateUniqueValueError if any duplicate value is found.
     """
-    errors_by_row: dict[int, list[str]] = {}
+    seen: set[str] = set()
+    duplicates: list[str] = []
 
-    for i, row in enumerate(rows):
-        row_errors = validate_row(row, i)
-        if row_errors:
-            errors_by_row[i] = row_errors
-            if stop_on_first:
-                break
+    for row in rows:
+        val = row.get(col_name, "").strip()
+        if not val:
+            continue
+        if val in seen:
+            if val not in duplicates:
+                duplicates.append(val)
+        else:
+            seen.add(val)
 
-    return {
-        "is_valid"     : len(errors_by_row) == 0,
-        "error_count"  : sum(len(v) for v in errors_by_row.values()),
-        "errors_by_row": errors_by_row,
+    if duplicates:
+        raise DuplicateUniqueValueError(col_name, duplicates)
+
+
+def export_blank_excel_template(file_path: str, column_headers: list[str]) -> None:
+    """
+    Export a clean blank Microsoft Excel (.xlsx) dataset template.
+    Column headers match the visual template fields exactly.
+    """
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Student Data"
+
+    # Header styling
+    header_fill = PatternFill(start_color="1A1A2E", end_color="1A1A2E", fill_type="solid")
+    header_font = Font(name="Segoe UI", size=11, bold=True, color="FFFFFF")
+    header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    ws.row_dimensions[1].height = 28
+
+    for col_idx, header in enumerate(column_headers, start=1):
+        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = header_align
+        # Set generous default column width
+        ws.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = max(len(header) + 6, 18)
+
+    wb.save(file_path)
+
+
+def export_dataset_backup(
+    backup_path: str,
+    rows: list[dict[str, str]],
+    headers: list[str],
+    template_metadata: dict[str, Any] | None = None,
+) -> None:
+    """
+    Export dataset and associated template state to a `.dataset.backup` file.
+    """
+    data = {
+        "format_version": "1.0",
+        "headers": headers,
+        "records": rows,
+        "record_count": len(rows),
+        "template_metadata": template_metadata or {},
     }
+    with open(backup_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def import_dataset_backup(backup_path: str) -> tuple[list[str], list[dict[str, str]], dict[str, Any]]:
+    """
+    Import and restore from a `.dataset.backup` file.
+    Returns (headers, rows, template_metadata).
+    """
+    with open(backup_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    headers = data.get("headers", [])
+    records = data.get("records", [])
+    meta = data.get("template_metadata", {})
+    return headers, records, meta

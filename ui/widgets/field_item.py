@@ -1,18 +1,18 @@
 ﻿"""
 FieldItem - draggable, resizable text placeholder on the template canvas.
 
-Each instance represents one text field that will be filled with a value
-from a mapped Excel column during result generation.  At design time it
-displays  {{ColumnName}}  over the background image so the teacher can
-position it precisely.
-
-Resize: blue square handle at bottom-right corner (drag to resize).
-Move  : drag anywhere else on the item body.
+Supports:
+- Label & Mapped Excel Column
+- Unique Field designation (is_unique)
+- Typography: Font Family, Size, Color, Bold, Italic, Underline, Alignment
+- Multiline wrapping
+- Dynamic Geometry & Drag-Resize Handling
+- Complete JSON Serialization
 """
 from __future__ import annotations
 
 from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QPen
+from PyQt6.QtGui import QColor, QFont, QPen, QTextOption
 from PyQt6.QtWidgets import QGraphicsItem, QGraphicsObject
 
 
@@ -25,10 +25,6 @@ class FieldItem(QGraphicsObject):
     geometry_changed = pyqtSignal(float, float)
 
     HANDLE_SIZE: int = 10   # px – resize handle square side length
-
-    # ------------------------------------------------------------------
-    # Construction
-    # ------------------------------------------------------------------
 
     def __init__(
         self,
@@ -44,6 +40,7 @@ class FieldItem(QGraphicsObject):
         # Identity
         self.label: str = label
         self.mapped_column: str = ""
+        self.is_unique: bool = False
 
         # Typography
         self.font_family: str = "Segoe UI"
@@ -51,6 +48,8 @@ class FieldItem(QGraphicsObject):
         self.color: str = "#000000"
         self.bold: bool = False
         self.italic: bool = False
+        self.underline: bool = False
+        self.multiline: bool = False
         self.alignment: str = "Left"   # "Left" | "Center" | "Right"
 
         # Geometry (local coordinates)
@@ -77,7 +76,6 @@ class FieldItem(QGraphicsObject):
     # ------------------------------------------------------------------
 
     def boundingRect(self) -> QRectF:
-        # +1 px margin so the dashed selection border is not clipped
         return QRectF(-1.0, -1.0, self._width + 2.0, self._height + 2.0)
 
     def paint(self, painter, option, widget=None) -> None:  # noqa: ARG002
@@ -90,17 +88,26 @@ class FieldItem(QGraphicsObject):
         font = QFont(self.font_family, self.font_size)
         font.setBold(self.bold)
         font.setItalic(self.italic)
+        font.setUnderline(self.underline)
         painter.setFont(font)
         painter.setPen(QColor(self.color))
 
-        align_h = {
+        align_flags = {
             "Left"  : Qt.AlignmentFlag.AlignLeft,
             "Center": Qt.AlignmentFlag.AlignHCenter,
             "Right" : Qt.AlignmentFlag.AlignRight,
         }.get(self.alignment, Qt.AlignmentFlag.AlignLeft)
 
-        display = "{{" + (self.mapped_column or self.label) + "}}"
-        painter.drawText(rect, align_h | Qt.AlignmentFlag.AlignVCenter, display)
+        prefix = "[★ Unique] " if self.is_unique else ""
+        col_name = self.mapped_column or self.label
+        display = f"{prefix}{{{{{col_name}}}}}"
+
+        if self.multiline:
+            flags = align_flags | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap
+        else:
+            flags = align_flags | Qt.AlignmentFlag.AlignVCenter
+
+        painter.drawText(rect, flags, display)
 
         # ── Selection chrome ─────────────────────────────────────────────
         if selected:
@@ -178,51 +185,56 @@ class FieldItem(QGraphicsObject):
     # Property setters (each triggers a repaint)
     # ------------------------------------------------------------------
 
-    def set_label(self, v: str) -> None:
-        self.label = v
+    def set_label(self, label: str) -> None:
+        self.label = label
         self.update()
 
-    def set_mapped_column(self, v: str) -> None:
-        self.mapped_column = v
+    def set_mapped_column(self, col: str) -> None:
+        self.mapped_column = col
         self.update()
 
-    def set_font_family(self, v: str) -> None:
-        self.font_family = v
+    def set_is_unique(self, is_unique: bool) -> None:
+        self.is_unique = is_unique
         self.update()
 
-    def set_font_size(self, v: int) -> None:
-        self.font_size = v
+    def set_font_family(self, family: str) -> None:
+        self.font_family = family
         self.update()
 
-    def set_color(self, v: str) -> None:
-        self.color = v
+    def set_font_size(self, size: int) -> None:
+        self.font_size = max(6, size)
         self.update()
 
-    def set_bold(self, v: bool) -> None:
-        self.bold = v
+    def set_color(self, hex_color: str) -> None:
+        self.color = hex_color
         self.update()
 
-    def set_italic(self, v: bool) -> None:
-        self.italic = v
+    def set_bold(self, bold: bool) -> None:
+        self.bold = bold
         self.update()
 
-    def set_alignment(self, v: str) -> None:
-        self.alignment = v
+    def set_italic(self, italic: bool) -> None:
+        self.italic = italic
         self.update()
 
-    def set_width(self, w: float) -> None:
+    def set_underline(self, underline: bool) -> None:
+        self.underline = underline
+        self.update()
+
+    def set_multiline(self, multiline: bool) -> None:
+        self.multiline = multiline
+        self.update()
+
+    def set_alignment(self, align: str) -> None:
+        if align in ("Left", "Center", "Right"):
+            self.alignment = align
+            self.update()
+
+    def set_field_size(self, w: float, h: float) -> None:
         self.prepareGeometryChange()
-        self._width = max(60.0, float(w))
-        self.update()
-
-    def set_height(self, h: float) -> None:
-        self.prepareGeometryChange()
+        self._width  = max(60.0, float(w))
         self._height = max(20.0, float(h))
         self.update()
-
-    # ------------------------------------------------------------------
-    # Read-only geometry accessors
-    # ------------------------------------------------------------------
 
     @property
     def width(self) -> float:
@@ -241,6 +253,7 @@ class FieldItem(QGraphicsObject):
         return {
             "label"        : self.label,
             "mapped_column": self.mapped_column,
+            "is_unique"    : self.is_unique,
             "x"            : round(p.x(), 2),
             "y"            : round(p.y(), 2),
             "width"        : round(self._width, 2),
@@ -250,6 +263,8 @@ class FieldItem(QGraphicsObject):
             "color"        : self.color,
             "bold"         : self.bold,
             "italic"       : self.italic,
+            "underline"    : self.underline,
+            "multiline"    : self.multiline,
             "alignment"    : self.alignment,
         }
 
@@ -263,19 +278,17 @@ class FieldItem(QGraphicsObject):
             height = d.get("height",  36.0),
         )
         item.mapped_column = d.get("mapped_column", "")
+        item.is_unique     = d.get("is_unique",     False)
         item.font_family   = d.get("font_family",   "Segoe UI")
         item.font_size     = d.get("font_size",      12)
         item.color         = d.get("color",          "#000000")
         item.bold          = d.get("bold",           False)
         item.italic        = d.get("italic",         False)
+        item.underline     = d.get("underline",      False)
+        item.multiline     = d.get("multiline",      False)
         item.alignment     = d.get("alignment",      "Left")
         return item
 
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
-
     def _on_handle(self, pos: QPointF) -> bool:
-        """True if pos is inside the resize-handle square."""
         hs = float(self.HANDLE_SIZE)
         return QRectF(self._width - hs, self._height - hs, hs, hs).contains(pos)

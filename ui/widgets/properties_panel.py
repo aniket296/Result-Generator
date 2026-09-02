@@ -1,20 +1,13 @@
 ﻿"""
-PropertiesPanel - right-side panel for inspecting and editing a selected FieldItem.
+PropertiesPanel - right-side sidebar for configuring the selected FieldItem.
 
-Signal flow (all changes are emitted as signals; TemplateEditorView applies
-them to the active FieldItem, keeping this widget fully decoupled from
-the graphics layer):
-
-  User edits control → PropertiesPanel emits signal
-                     → TemplateEditorView slot applies change to FieldItem
-
-  FieldItem dragged  → position_changed signal
-                     → TemplateEditorView calls update_position()
-                     → PropertiesPanel silently updates X/Y spinboxes
-
-  FieldItem resized  → geometry_changed signal
-                     → TemplateEditorView calls update_geometry()
-                     → PropertiesPanel silently updates W/H spinboxes
+Allows live editing of:
+- Field Label (Excel variable identifier)
+- Unique Field designation (Student / Record Identifier)
+- Excel column mapping dropdown
+- Typography (Font Family, Size, Color Picker, Bold, Italic, Underline, Alignment, Multiline)
+- Precise geometry spinboxes (X, Y, Width, Height)
+- Delete button with confirmation
 """
 from __future__ import annotations
 
@@ -36,100 +29,179 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ui.widgets.field_item import FieldItem
+
 
 class PropertiesPanel(QWidget):
-    """Sidebar panel for editing the properties of a selected FieldItem."""
+    """Sidebar widget displayed on the right of the Template Editor."""
 
-    # Emitted when the user changes a property
+    # ── Signals emitted on user edits ─────────────────────────────────────────
     label_changed       = pyqtSignal(str)
     column_changed      = pyqtSignal(str)
+    unique_changed      = pyqtSignal(bool)
     font_family_changed = pyqtSignal(str)
     font_size_changed   = pyqtSignal(int)
     color_changed       = pyqtSignal(str)
     bold_changed        = pyqtSignal(bool)
     italic_changed      = pyqtSignal(bool)
-    alignment_changed   = pyqtSignal(str)   # "Left" | "Center" | "Right"
-    x_changed           = pyqtSignal(int)
-    y_changed           = pyqtSignal(int)
-    width_changed       = pyqtSignal(int)
-    height_changed      = pyqtSignal(int)
+    underline_changed   = pyqtSignal(bool)
+    multiline_changed   = pyqtSignal(bool)
+    alignment_changed   = pyqtSignal(str)
+    x_changed           = pyqtSignal(float)
+    y_changed           = pyqtSignal(float)
+    width_changed       = pyqtSignal(float)
+    height_changed      = pyqtSignal(float)
     delete_requested    = pyqtSignal()
 
-    _NO_COL = "(No column mapped)"
+    _NO_COL = "-- None (use Label) --"
 
-    # ------------------------------------------------------------------
-    # Construction
-    # ------------------------------------------------------------------
-
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self._updating = False          # suppresses recursive signal emissions
-        self._current_color = "#000000"
-        self.setFixedWidth(272)
+        self._item: FieldItem | None = None
+        self._updating: bool = False
+        self._color_hex: str = "#000000"
+        self._excel_columns: list[str] = []
+
+        self.setFixedWidth(290)
         self.setStyleSheet("background: white;")
         self._build_ui()
 
-    # ------------------------------------------------------------------
-    # UI construction
-    # ------------------------------------------------------------------
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def set_excel_columns(self, columns: list[str]) -> None:
+        """Update available Excel columns for mapping."""
+        self._excel_columns = list(columns)
+        current = self._column_combo.currentText()
+        self._column_combo.blockSignals(True)
+        self._column_combo.clear()
+        self._column_combo.addItem(self._NO_COL)
+        for col in self._excel_columns:
+            self._column_combo.addItem(col)
+        idx = self._column_combo.findText(current)
+        self._column_combo.setCurrentIndex(max(0, idx))
+        self._column_combo.blockSignals(False)
+
+    def load_item(self, item: FieldItem | None) -> None:
+        """Bind to the currently selected FieldItem, or show empty state."""
+        self._item = item
+        if item is None:
+            self._scroll.hide()
+            self._empty.show()
+            return
+
+        self._empty.hide()
+        self._scroll.show()
+
+        self._updating = True
+        try:
+            self._label_edit.setText(item.label)
+
+            # Column combo
+            if item.mapped_column and item.mapped_column in self._excel_columns:
+                self._column_combo.setCurrentText(item.mapped_column)
+            else:
+                self._column_combo.setCurrentIndex(0)
+
+            self._unique_cb.setChecked(item.is_unique)
+
+            # Typography
+            self._font_combo.setCurrentFont(QFont(item.font_family))
+            self._size_spin.setValue(item.font_size)
+            self._color_hex = item.color
+            self._sync_color_btn()
+            self._bold_cb.setChecked(item.bold)
+            self._italic_cb.setChecked(item.italic)
+            self._underline_cb.setChecked(item.underline)
+            self._multiline_cb.setChecked(item.multiline)
+            self._set_align_active(item.alignment)
+
+            # Geometry
+            p = item.pos()
+            self._x_spin.setValue(int(p.x()))
+            self._y_spin.setValue(int(p.y()))
+            self._w_spin.setValue(int(item.width))
+            self._h_spin.setValue(int(item.height))
+        finally:
+            self._updating = False
+
+    def update_position(self, x: float, y: float) -> None:
+        """Called externally when the item is dragged on canvas."""
+        self._updating = True
+        try:
+            self._x_spin.setValue(int(x))
+            self._y_spin.setValue(int(y))
+        finally:
+            self._updating = False
+
+    def update_geometry(self, w: float, h: float) -> None:
+        """Called externally when the item is resized via handle."""
+        self._updating = True
+        try:
+            self._w_spin.setValue(int(w))
+            self._h_spin.setValue(int(h))
+        finally:
+            self._updating = False
+
+    # ── UI Construction ───────────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # ── Panel header ─────────────────────────────────────────────────
-        header = QLabel("   Field Properties")
-        header.setFixedHeight(46)
+        # Header
+        header = QFrame()
         header.setStyleSheet("""
-            background: #f9fafb;
-            border-left: 1px solid #e5e7eb;
-            border-bottom: 1px solid #e5e7eb;
-            font-size: 13px; font-weight: 700; color: #1a1a2e;
+            QFrame {
+                background: #f9fafb;
+                border-bottom: 1px solid #e5e7eb;
+                padding: 10px 14px;
+            }
         """)
+        h_layout = QHBoxLayout(header)
+        h_layout.setContentsMargins(14, 10, 14, 10)
+        title = QLabel("Field Properties")
+        title.setStyleSheet("font-weight: 700; font-size: 13px; color: #1a1a2e;")
+        h_layout.addWidget(title)
         root.addWidget(header)
 
-        # ── Scroll area (holds all property controls) ────────────────────
+        # Scrollable form
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setStyleSheet("border-left: 1px solid #e5e7eb;")
+        self._scroll = scroll
 
-        inner = QWidget()
-        self._form = QVBoxLayout(inner)
-        self._form.setContentsMargins(14, 12, 14, 16)
-        self._form.setSpacing(5)
+        content = QWidget()
+        self._form = QVBoxLayout(content)
+        self._form.setContentsMargins(14, 12, 14, 14)
+        self._form.setSpacing(8)
 
         self._build_field_section()
         self._build_typography_section()
         self._build_geometry_section()
-        self._build_delete_button()
-        self._form.addStretch()
+        self._build_actions_section()
 
-        scroll.setWidget(inner)
+        scroll.setWidget(content)
         root.addWidget(scroll, stretch=1)
-        self._scroll = scroll
 
-        # ── Empty state ──────────────────────────────────────────────────
-        self._empty = QLabel("Select a field\nto edit its properties.")
+        # Empty-state placeholder
+        self._empty = QLabel("Select a field on the canvas\nto edit its properties.")
         self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty.setStyleSheet("""
-            font-size: 12px; color: #9ca3af; padding: 24px;
+            color: #9ca3af; font-size: 12px;
             border-left: 1px solid #e5e7eb;
+            padding: 24px;
         """)
         root.addWidget(self._empty, stretch=1)
 
-        # Start with empty state
         scroll.hide()
 
-    # ── Section builders ──────────────────────────────────────────────────
-
     def _build_field_section(self) -> None:
-        self._form.addWidget(self._section_lbl("Field"))
+        self._form.addWidget(self._section_lbl("Field Identity"))
 
         # Label
-        self._form.addWidget(self._caption("Label"))
+        self._form.addWidget(self._caption("Field Name (Label)"))
         self._label_edit = QLineEdit()
         self._label_edit.setPlaceholderText("e.g. Student_Name")
         self._label_edit.setStyleSheet(self._INPUT)
@@ -150,9 +222,17 @@ class PropertiesPanel(QWidget):
         )
         self._form.addWidget(self._column_combo)
 
+        # Unique designation checkbox
+        self._unique_cb = QCheckBox("★ Unique Field (Record Identifier)")
+        self._unique_cb.setStyleSheet("font-size: 12px; font-weight: 600; color: #1d4ed8; margin-top: 4px;")
+        self._unique_cb.toggled.connect(
+            lambda v: self._live(lambda: self.unique_changed.emit(v))
+        )
+        self._form.addWidget(self._unique_cb)
+
     def _build_typography_section(self) -> None:
         self._form.addSpacing(10)
-        self._form.addWidget(self._section_lbl("Typography"))
+        self._form.addWidget(self._section_lbl("Typography & Text"))
 
         # Font family
         self._form.addWidget(self._caption("Font Family"))
@@ -189,21 +269,34 @@ class PropertiesPanel(QWidget):
         row1.addWidget(self._color_btn)
         self._form.addLayout(row1)
 
-        # Bold + Italic
+        # Bold + Italic + Underline
         row2 = QHBoxLayout()
         row2.setSpacing(8)
-        self._bold_cb   = QCheckBox("Bold")
-        self._italic_cb = QCheckBox("Italic")
+        self._bold_cb      = QCheckBox("Bold")
+        self._italic_cb    = QCheckBox("Italic")
+        self._underline_cb = QCheckBox("Underline")
         self._bold_cb.toggled.connect(
             lambda v: self._live(lambda: self.bold_changed.emit(v))
         )
         self._italic_cb.toggled.connect(
             lambda v: self._live(lambda: self.italic_changed.emit(v))
         )
+        self._underline_cb.toggled.connect(
+            lambda v: self._live(lambda: self.underline_changed.emit(v))
+        )
         row2.addWidget(self._bold_cb)
         row2.addWidget(self._italic_cb)
+        row2.addWidget(self._underline_cb)
         row2.addStretch()
         self._form.addLayout(row2)
+
+        # Multiline text wrap
+        self._multiline_cb = QCheckBox("Multiline Text (Auto Wrap)")
+        self._multiline_cb.setStyleSheet("font-size: 12px; color: #374151;")
+        self._multiline_cb.toggled.connect(
+            lambda v: self._live(lambda: self.multiline_changed.emit(v))
+        )
+        self._form.addWidget(self._multiline_cb)
 
         # Alignment buttons
         row3 = QHBoxLayout()
@@ -224,7 +317,7 @@ class PropertiesPanel(QWidget):
 
     def _build_geometry_section(self) -> None:
         self._form.addSpacing(10)
-        self._form.addWidget(self._section_lbl("Position & Size"))
+        self._form.addWidget(self._section_lbl("Position & Dimensions"))
 
         xy = QHBoxLayout()
         xy.setSpacing(6)
@@ -244,8 +337,8 @@ class PropertiesPanel(QWidget):
 
         wh = QHBoxLayout()
         wh.setSpacing(6)
-        self._w_spin = self._coord_spin(mn=60)
-        self._h_spin = self._coord_spin(mn=20)
+        self._w_spin = self._coord_spin(60, 4000)
+        self._h_spin = self._coord_spin(20, 4000)
         self._w_spin.valueChanged.connect(
             lambda v: self._live(lambda: self.width_changed.emit(v))
         )
@@ -258,141 +351,63 @@ class PropertiesPanel(QWidget):
         wh.addWidget(self._h_spin)
         self._form.addLayout(wh)
 
-    def _build_delete_button(self) -> None:
-        self._form.addSpacing(16)
-        btn = QPushButton("🗑   Delete This Field")
-        btn.setFixedHeight(34)
+    def _build_actions_section(self) -> None:
+        self._form.addSpacing(12)
+        btn = QPushButton("🗑  Delete Field")
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setStyleSheet("""
             QPushButton {
-                background: #fee2e2; color: #dc2626;
-                border: 1px solid #fca5a5; border-radius: 6px;
-                font-size: 13px; font-weight: 600;
+                background: #fee2e2; color: #b91c1c;
+                border: 1px solid #fca5a5; border-radius: 5px;
+                padding: 6px 12px; font-size: 12px; font-weight: 600;
             }
             QPushButton:hover { background: #fecaca; }
         """)
         btn.clicked.connect(self.delete_requested.emit)
         self._form.addWidget(btn)
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+    # ── Private event helpers ─────────────────────────────────────────────────
 
-    def set_excel_headers(self, headers: list[str]) -> None:
-        """Repopulate the column-mapping dropdown with new Excel headers."""
-        self._updating = True
-        saved = self._column_combo.currentText()
-        self._column_combo.clear()
-        self._column_combo.addItem(self._NO_COL)
-        for h in headers:
-            self._column_combo.addItem(h)
-        idx = self._column_combo.findText(saved)
-        self._column_combo.setCurrentIndex(max(0, idx))
-        self._updating = False
-
-    def load_item(self, item) -> None:
-        """
-        Populate all controls from *item* (a FieldItem) and show the form.
-        Pass None to revert to the empty-state placeholder.
-        """
-        if item is None:
-            self._scroll.hide()
-            self._empty.show()
-            return
-
-        self._updating = True
-
-        self._label_edit.setText(item.label)
-
-        idx = self._column_combo.findText(item.mapped_column)
-        self._column_combo.setCurrentIndex(max(0, idx))
-
-        self._font_combo.setCurrentFont(QFont(item.font_family))
-        self._size_spin.setValue(item.font_size)
-
-        self._current_color = item.color
-        self._sync_color_btn()
-
-        self._bold_cb.setChecked(item.bold)
-        self._italic_cb.setChecked(item.italic)
-
-        for key, btn in self._align_btns.items():
-            btn.setChecked(key == item.alignment)
-        self._sync_align_styles()
-
-        p = item.pos()
-        self._x_spin.setValue(round(p.x()))
-        self._y_spin.setValue(round(p.y()))
-        self._w_spin.setValue(round(item.width))
-        self._h_spin.setValue(round(item.height))
-
-        self._updating = False
-
-        self._empty.hide()
-        self._scroll.show()
-
-    def update_position(self, x: float, y: float) -> None:
-        """Called by TemplateEditorView when the item is dragged."""
-        self._updating = True
-        self._x_spin.setValue(round(x))
-        self._y_spin.setValue(round(y))
-        self._updating = False
-
-    def update_geometry(self, w: float, h: float) -> None:
-        """Called by TemplateEditorView when the item is resized via handle."""
-        self._updating = True
-        self._w_spin.setValue(round(w))
-        self._h_spin.setValue(round(h))
-        self._updating = False
-
-    # ------------------------------------------------------------------
-    # Private slots
-    # ------------------------------------------------------------------
+    def _live(self, emit_fn) -> None:
+        if not self._updating and self._item is not None:
+            emit_fn()
 
     def _on_color_clicked(self) -> None:
-        col = QColorDialog.getColor(QColor(self._current_color), self, "Select Text Colour")
+        col = QColorDialog.getColor(
+            QColor(self._color_hex), self, "Select Text Color"
+        )
         if col.isValid():
-            self._current_color = col.name()
+            self._color_hex = col.name()
             self._sync_color_btn()
-            if not self._updating:
-                self.color_changed.emit(self._current_color)
-
-    def _on_align(self, key: str) -> None:
-        for k, btn in self._align_btns.items():
-            btn.setChecked(k == key)
-        self._sync_align_styles()
-        if not self._updating:
-            self.alignment_changed.emit(key)
-
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
-
-    def _live(self, fn) -> None:
-        """Call fn() only when not in a programmatic update."""
-        if not self._updating:
-            fn()
+            self._live(lambda: self.color_changed.emit(self._color_hex))
 
     def _sync_color_btn(self) -> None:
         self._color_btn.setStyleSheet(f"""
             QPushButton {{
-                background-color: {self._current_color};
-                border: 2px solid #d1d5db; border-radius: 4px;
+                background-color: {self._color_hex};
+                border: 1px solid #9ca3af;
+                border-radius: 3px;
             }}
-            QPushButton:hover {{ border-color: #6b7280; }}
         """)
 
-    def _sync_align_styles(self) -> None:
-        for key, btn in self._align_btns.items():
+    def _on_align(self, key: str) -> None:
+        self._set_align_active(key)
+        self._live(lambda: self.alignment_changed.emit(key))
+
+    def _set_align_active(self, active_key: str) -> None:
+        for k, btn in self._align_btns.items():
+            btn.blockSignals(True)
+            btn.setChecked(k == active_key)
+            btn.blockSignals(False)
             btn.setStyleSheet(self._TOGGLE_ON if btn.isChecked() else self._TOGGLE_OFF)
 
     @staticmethod
     def _section_lbl(text: str) -> QLabel:
         lbl = QLabel(text.upper())
         lbl.setStyleSheet("""
-            font-size: 10px; font-weight: 700; color: #9ca3af;
-            letter-spacing: 0.8px; padding-top: 2px;
-            border-bottom: 1px solid #f0f0f0; padding-bottom: 3px;
+            font-size: 10px; font-weight: 700;
+            color: #9ca3af; letter-spacing: 0.5px;
+            margin-top: 2px;
         """)
         return lbl
 
@@ -410,6 +425,7 @@ class PropertiesPanel(QWidget):
             QSpinBox {
                 border: 1px solid #d1d5db; border-radius: 4px;
                 padding: 2px 4px; font-size: 12px; background: white;
+                color: #000000;
             }
             QSpinBox:focus { border-color: #4f7ef8; }
         """)
@@ -421,8 +437,15 @@ class PropertiesPanel(QWidget):
         QWidget {
             border: 1px solid #d1d5db; border-radius: 4px;
             padding: 3px 6px; font-size: 12px; background: white;
+            color: #000000;
         }
         QWidget:focus { border-color: #4f7ef8; }
+        QComboBox QAbstractItemView {
+            background-color: white;
+            color: #000000;
+            selection-background-color: #eff6ff;
+            selection-color: #1d4ed8;
+        }
     """
 
     _TOGGLE_OFF = """
