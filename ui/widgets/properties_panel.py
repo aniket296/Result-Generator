@@ -1,15 +1,25 @@
 """
-PropertiesPanel - right-side sidebar for configuring the selected FieldItem.
+PropertiesPanel - right-side sidebar for configuring the selected FieldItem, ChartItem, or BadgeItem.
 
 Allows live editing of:
-- Field Label (Excel variable identifier)
-- Unique Field designation (Student / Record Identifier)
-- Excel column mapping dropdown
-- Typography (Font Family, Size, Color Picker, Bold, Italic, Underline, Alignment, Multiline)
-- Precise geometry spinboxes (X, Y, Width, Height)
-- Delete button with confirmation
+  FieldItem mode:
+    - Field Label (Excel variable identifier)
+    - Unique Field designation
+    - Excel column mapping dropdown
+    - Typography (Font Family, Size, Color Picker, Bold, Italic, Underline, Alignment, Multiline)
+  ChartItem mode:
+    - Chart type (Vertical / Horizontal Bars)
+    - Subject column checkboxes (multi-select from Excel headers)
+  BadgeItem mode:
+    - Badge image file selector
+    - Visibility rule: [Column] [Operator] [Threshold Value]
+  Shared (all modes):
+    - Precise geometry spinboxes (X, Y, Width, Height)
+    - Delete button
 """
 from __future__ import annotations
+
+import os
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
@@ -17,6 +27,7 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QColorDialog,
     QComboBox,
+    QFileDialog,
     QFontComboBox,
     QFrame,
     QHBoxLayout,
@@ -29,13 +40,15 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ui.widgets.badge_item import BadgeItem
+from ui.widgets.chart_item import ChartItem
 from ui.widgets.field_item import FieldItem
 
 
 class PropertiesPanel(QWidget):
     """Sidebar widget displayed on the right of the Template Editor."""
 
-    # ── Signals emitted on user edits ─────────────────────────────────────────
+    # ── Signals (FieldItem) ───────────────────────────────────────────────────
     label_changed       = pyqtSignal(str)
     column_changed      = pyqtSignal(str)
     unique_changed      = pyqtSignal(bool)
@@ -47,20 +60,31 @@ class PropertiesPanel(QWidget):
     underline_changed   = pyqtSignal(bool)
     multiline_changed   = pyqtSignal(bool)
     alignment_changed   = pyqtSignal(str)
-    x_changed           = pyqtSignal(float)
-    y_changed           = pyqtSignal(float)
-    width_changed       = pyqtSignal(float)
-    height_changed      = pyqtSignal(float)
-    delete_requested    = pyqtSignal()
+
+    # ── Signals (shared geometry) ─────────────────────────────────────────────
+    x_changed        = pyqtSignal(float)
+    y_changed        = pyqtSignal(float)
+    width_changed    = pyqtSignal(float)
+    height_changed   = pyqtSignal(float)
+    delete_requested = pyqtSignal()
+
+    # ── Signals (ChartItem) ───────────────────────────────────────────────────
+    chart_columns_changed = pyqtSignal(list)
+    chart_style_changed   = pyqtSignal(str)
+
+    # ── Signals (BadgeItem) ───────────────────────────────────────────────────
+    badge_image_changed = pyqtSignal(str)          # absolute image path
+    badge_rule_changed  = pyqtSignal(str, str, str) # column, operator, value
 
     _NO_COL = "-- None (use Label) --"
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self._item: FieldItem | None = None
+        self._item: FieldItem | ChartItem | BadgeItem | None = None
         self._updating: bool = False
         self._color_hex: str = "#000000"
         self._excel_columns: list[str] = []
+        self._chart_column_checkboxes: dict[str, QCheckBox] = {}
 
         self.setFixedWidth(290)
         self.setStyleSheet("background: white;")
@@ -69,8 +93,10 @@ class PropertiesPanel(QWidget):
     # ── Public API ────────────────────────────────────────────────────────────
 
     def set_excel_columns(self, columns: list[str]) -> None:
-        """Update available Excel columns for mapping."""
+        """Update available Excel columns for field mapping, chart checkboxes, and badge rule combo."""
         self._excel_columns = list(columns)
+
+        # Field: update column combo
         current = self._column_combo.currentText()
         self._column_combo.blockSignals(True)
         self._column_combo.clear()
@@ -81,8 +107,21 @@ class PropertiesPanel(QWidget):
         self._column_combo.setCurrentIndex(max(0, idx))
         self._column_combo.blockSignals(False)
 
-    def load_item(self, item: FieldItem | None) -> None:
-        """Bind to the currently selected FieldItem, or show empty state."""
+        # Chart: rebuild checkboxes
+        self._rebuild_chart_checkboxes(columns)
+
+        # Badge: update rule column combo
+        current_badge = self._badge_col_combo.currentText()
+        self._badge_col_combo.blockSignals(True)
+        self._badge_col_combo.clear()
+        for col in self._excel_columns:
+            self._badge_col_combo.addItem(col)
+        idx2 = self._badge_col_combo.findText(current_badge)
+        self._badge_col_combo.setCurrentIndex(max(0, idx2))
+        self._badge_col_combo.blockSignals(False)
+
+    def load_item(self, item: FieldItem | ChartItem | BadgeItem | None) -> None:
+        """Bind to the currently selected item (FieldItem, ChartItem, or BadgeItem), or show empty state."""
         self._item = item
         if item is None:
             self._scroll.hide()
@@ -94,33 +133,87 @@ class PropertiesPanel(QWidget):
 
         self._updating = True
         try:
-            self._label_edit.setText(item.label)
-
-            # Column combo
-            if item.mapped_column and item.mapped_column in self._excel_columns:
-                self._column_combo.setCurrentText(item.mapped_column)
-            else:
-                self._column_combo.setCurrentIndex(0)
-
-            self._unique_cb.setChecked(item.is_unique)
-
-            # Typography
-            self._font_combo.setCurrentFont(QFont(item.font_family))
-            self._size_spin.setValue(item.font_size)
-            self._color_hex = item.color
-            self._sync_color_btn()
-            self._bold_cb.setChecked(item.bold)
-            self._italic_cb.setChecked(item.italic)
-            self._underline_cb.setChecked(item.underline)
-            self._multiline_cb.setChecked(item.multiline)
-            self._set_align_active(item.alignment)
-
-            # Geometry
+            # Shared: geometry
             p = item.pos()
             self._x_spin.setValue(int(p.x()))
             self._y_spin.setValue(int(p.y()))
             self._w_spin.setValue(int(item.width))
             self._h_spin.setValue(int(item.height))
+
+            if isinstance(item, ChartItem):
+                # ── Chart mode ──
+                self._field_container.hide()
+                self._badge_container.hide()
+                self._chart_container.show()
+                self._panel_title.setText("Chart Properties")
+
+                # Style combo
+                style_map = {"vertical": "Vertical Bars", "horizontal": "Horizontal Bars"}
+                self._chart_style_combo.setCurrentText(style_map.get(item.chart_style, "Vertical Bars"))
+
+                # Checkboxes: update checked state
+                for col, cb in self._chart_column_checkboxes.items():
+                    cb.blockSignals(True)
+                    cb.setChecked(col in item.chart_columns)
+                    cb.blockSignals(False)
+
+            elif isinstance(item, BadgeItem):
+                # ── Badge mode ──
+                self._field_container.hide()
+                self._chart_container.hide()
+                self._badge_container.show()
+                self._panel_title.setText("Badge Properties")
+
+                # Image label
+                if item.badge_image_path:
+                    self._badge_path_lbl.setText(os.path.basename(item.badge_image_path))
+                    self._badge_path_lbl.setStyleSheet(
+                        "font-size: 11px; color: #374151; padding: 2px 0;"
+                    )
+                else:
+                    self._badge_path_lbl.setText("No image selected")
+                    self._badge_path_lbl.setStyleSheet(
+                        "font-size: 11px; color: #9ca3af; font-style: italic; padding: 2px 0;"
+                    )
+
+                # Rule column
+                idx = self._badge_col_combo.findText(item.rule_column)
+                if idx >= 0:
+                    self._badge_col_combo.setCurrentIndex(idx)
+
+                # Rule operator
+                op_idx = self._badge_op_combo.findText(item.rule_operator)
+                self._badge_op_combo.setCurrentIndex(max(0, op_idx))
+
+                # Rule value
+                self._badge_value_edit.setText(item.rule_value)
+
+            else:
+                # ── Field mode ──
+                self._chart_container.hide()
+                self._badge_container.hide()
+                self._field_container.show()
+                self._panel_title.setText("Field Properties")
+
+                self._label_edit.setText(item.label)
+
+                if item.mapped_column and item.mapped_column in self._excel_columns:
+                    self._column_combo.setCurrentText(item.mapped_column)
+                else:
+                    self._column_combo.setCurrentIndex(0)
+
+                self._unique_cb.setChecked(item.is_unique)
+
+                # Typography
+                self._font_combo.setCurrentFont(QFont(item.font_family))
+                self._size_spin.setValue(item.font_size)
+                self._color_hex = item.color
+                self._sync_color_btn()
+                self._bold_cb.setChecked(item.bold)
+                self._italic_cb.setChecked(item.italic)
+                self._underline_cb.setChecked(item.underline)
+                self._multiline_cb.setChecked(item.multiline)
+                self._set_align_active(item.alignment)
         finally:
             self._updating = False
 
@@ -149,7 +242,7 @@ class PropertiesPanel(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # Header
+        # ── Header ──────────────────────────────────────────────────────
         header = QFrame()
         header.setStyleSheet("""
             QFrame {
@@ -160,12 +253,12 @@ class PropertiesPanel(QWidget):
         """)
         h_layout = QHBoxLayout(header)
         h_layout.setContentsMargins(14, 10, 14, 10)
-        title = QLabel("Field Properties")
-        title.setStyleSheet("font-weight: 700; font-size: 13px; color: #1a1a2e;")
-        h_layout.addWidget(title)
+        self._panel_title = QLabel("Field Properties")
+        self._panel_title.setStyleSheet("font-weight: 700; font-size: 13px; color: #1a1a2e;")
+        h_layout.addWidget(self._panel_title)
         root.addWidget(header)
 
-        # Scrollable form
+        # ── Scrollable form ──────────────────────────────────────────────
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -177,16 +270,43 @@ class PropertiesPanel(QWidget):
         self._form.setContentsMargins(14, 12, 14, 14)
         self._form.setSpacing(8)
 
-        self._build_field_section()
-        self._build_typography_section()
-        self._build_geometry_section()
-        self._build_actions_section()
+        # ── Field-specific container ─────────────────────────────────────
+        self._field_container = QWidget()
+        fc_layout = QVBoxLayout(self._field_container)
+        fc_layout.setContentsMargins(0, 0, 0, 0)
+        fc_layout.setSpacing(8)
+        self._build_field_section(fc_layout)
+        self._build_typography_section(fc_layout)
+        self._form.addWidget(self._field_container)
+
+        # ── Chart-specific container ─────────────────────────────────────
+        self._chart_container = QWidget()
+        cc_layout = QVBoxLayout(self._chart_container)
+        cc_layout.setContentsMargins(0, 0, 0, 0)
+        cc_layout.setSpacing(8)
+        self._build_chart_section(cc_layout)
+        self._form.addWidget(self._chart_container)
+        self._chart_container.hide()
+
+        # ── Badge-specific container ─────────────────────────────────────
+        self._badge_container = QWidget()
+        bc_layout = QVBoxLayout(self._badge_container)
+        bc_layout.setContentsMargins(0, 0, 0, 0)
+        bc_layout.setSpacing(8)
+        self._build_badge_section(bc_layout)
+        self._form.addWidget(self._badge_container)
+        self._badge_container.hide()
+
+        # ── Shared sections ──────────────────────────────────────────────
+        self._build_geometry_section(self._form)
+        self._build_actions_section(self._form)
+        self._form.addStretch()
 
         scroll.setWidget(content)
         root.addWidget(scroll, stretch=1)
 
-        # Empty-state placeholder
-        self._empty = QLabel("Select a field on the canvas\nto edit its properties.")
+        # ── Empty-state placeholder ──────────────────────────────────────
+        self._empty = QLabel("Select a field, chart, or badge\non the canvas to edit.")
         self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty.setStyleSheet("""
             color: #9ca3af; font-size: 12px;
@@ -197,21 +317,23 @@ class PropertiesPanel(QWidget):
 
         scroll.hide()
 
-    def _build_field_section(self) -> None:
-        self._form.addWidget(self._section_lbl("Field Identity"))
+    # ── Section builders ──────────────────────────────────────────────────────
+
+    def _build_field_section(self, layout: QVBoxLayout) -> None:
+        layout.addWidget(self._section_lbl("Field Identity"))
 
         # Label
-        self._form.addWidget(self._caption("Field Name (Label)"))
+        layout.addWidget(self._caption("Field Name (Label)"))
         self._label_edit = QLineEdit()
         self._label_edit.setPlaceholderText("e.g. Student_Name")
         self._label_edit.setStyleSheet(self._INPUT)
         self._label_edit.textChanged.connect(
             lambda t: self._live(lambda: self.label_changed.emit(t))
         )
-        self._form.addWidget(self._label_edit)
+        layout.addWidget(self._label_edit)
 
         # Column mapping
-        self._form.addWidget(self._caption("Map to Excel Column"))
+        layout.addWidget(self._caption("Map to Excel Column"))
         self._column_combo = QComboBox()
         self._column_combo.setStyleSheet(self._INPUT)
         self._column_combo.addItem(self._NO_COL)
@@ -220,30 +342,32 @@ class PropertiesPanel(QWidget):
                 lambda: self.column_changed.emit("" if t == self._NO_COL else t)
             )
         )
-        self._form.addWidget(self._column_combo)
+        layout.addWidget(self._column_combo)
 
-        # Unique designation checkbox
+        # Unique designation
         self._unique_cb = QCheckBox("★ Unique Field (Record Identifier)")
-        self._unique_cb.setStyleSheet("font-size: 12px; font-weight: 600; color: #1d4ed8; margin-top: 4px;")
+        self._unique_cb.setStyleSheet(
+            "font-size: 12px; font-weight: 600; color: #1d4ed8; margin-top: 4px;"
+        )
         self._unique_cb.toggled.connect(
             lambda v: self._live(lambda: self.unique_changed.emit(v))
         )
-        self._form.addWidget(self._unique_cb)
+        layout.addWidget(self._unique_cb)
 
-    def _build_typography_section(self) -> None:
-        self._form.addSpacing(10)
-        self._form.addWidget(self._section_lbl("Typography & Text"))
+    def _build_typography_section(self, layout: QVBoxLayout) -> None:
+        layout.addSpacing(10)
+        layout.addWidget(self._section_lbl("Typography & Text"))
 
         # Font family
-        self._form.addWidget(self._caption("Font Family"))
+        layout.addWidget(self._caption("Font Family"))
         self._font_combo = QFontComboBox()
         self._font_combo.setStyleSheet(self._INPUT)
         self._font_combo.currentFontChanged.connect(
             lambda f: self._live(lambda: self.font_family_changed.emit(f.family()))
         )
-        self._form.addWidget(self._font_combo)
+        layout.addWidget(self._font_combo)
 
-        # Size + Color on same row
+        # Size + Color
         row1 = QHBoxLayout()
         row1.setSpacing(6)
 
@@ -267,9 +391,9 @@ class PropertiesPanel(QWidget):
         row1.addSpacing(4)
         row1.addWidget(self._caption("Color:"))
         row1.addWidget(self._color_btn)
-        self._form.addLayout(row1)
+        layout.addLayout(row1)
 
-        # Bold + Italic + Underline
+        # Bold / Italic / Underline
         row2 = QHBoxLayout()
         row2.setSpacing(8)
         self._bold_cb      = QCheckBox("Bold")
@@ -288,15 +412,15 @@ class PropertiesPanel(QWidget):
         row2.addWidget(self._italic_cb)
         row2.addWidget(self._underline_cb)
         row2.addStretch()
-        self._form.addLayout(row2)
+        layout.addLayout(row2)
 
-        # Multiline text wrap
+        # Multiline
         self._multiline_cb = QCheckBox("Multiline Text (Auto Wrap)")
         self._multiline_cb.setStyleSheet("font-size: 12px; color: #374151;")
         self._multiline_cb.toggled.connect(
             lambda v: self._live(lambda: self.multiline_changed.emit(v))
         )
-        self._form.addWidget(self._multiline_cb)
+        layout.addWidget(self._multiline_cb)
 
         # Alignment buttons
         row3 = QHBoxLayout()
@@ -313,11 +437,98 @@ class PropertiesPanel(QWidget):
             self._align_btns[key] = btn
             row3.addWidget(btn)
         row3.addStretch()
-        self._form.addLayout(row3)
+        layout.addLayout(row3)
 
-    def _build_geometry_section(self) -> None:
-        self._form.addSpacing(10)
-        self._form.addWidget(self._section_lbl("Position & Dimensions"))
+    def _build_chart_section(self, layout: QVBoxLayout) -> None:
+        layout.addWidget(self._section_lbl("Chart Configuration"))
+
+        # Chart type
+        layout.addWidget(self._caption("Chart Type"))
+        self._chart_style_combo = QComboBox()
+        self._chart_style_combo.setStyleSheet(self._INPUT)
+        self._chart_style_combo.addItems(["Vertical Bars", "Horizontal Bars"])
+        self._chart_style_combo.currentTextChanged.connect(self._on_chart_style_changed)
+        layout.addWidget(self._chart_style_combo)
+
+        # Column checkboxes
+        layout.addSpacing(6)
+        layout.addWidget(self._section_lbl("Data Columns"))
+        layout.addWidget(self._caption("Select subject columns to chart:"))
+
+        self._chart_cols_container = QWidget()
+        self._chart_cols_layout = QVBoxLayout(self._chart_cols_container)
+        self._chart_cols_layout.setContentsMargins(0, 4, 0, 4)
+        self._chart_cols_layout.setSpacing(4)
+
+        self._chart_cols_placeholder = QLabel(
+            "Load an Excel dataset to\nsee available columns."
+        )
+        self._chart_cols_placeholder.setStyleSheet("font-size: 11px; color: #9ca3af; padding: 4px 0;")
+        layout.addWidget(self._chart_cols_container)
+
+    def _build_badge_section(self, layout: QVBoxLayout) -> None:
+        layout.addWidget(self._section_lbl("Badge Image"))
+
+        # File selector row
+        img_row = QHBoxLayout()
+        img_row.setSpacing(6)
+        browse_btn = QPushButton("📁 Browse Image")
+        browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        browse_btn.setStyleSheet("""
+            QPushButton {
+                background: #ffffff; color: #374151; border: 1px solid #d1d5db;
+                border-radius: 4px; padding: 4px 8px; font-size: 11px; font-weight: 600;
+            }
+            QPushButton:hover { background: #f3f4f6; color: #111827; }
+        """)
+        browse_btn.clicked.connect(self._on_browse_badge_image)
+        img_row.addWidget(browse_btn)
+
+        self._badge_path_lbl = QLabel("No image selected")
+        self._badge_path_lbl.setStyleSheet("font-size: 11px; color: #9ca3af; font-style: italic;")
+        img_row.addWidget(self._badge_path_lbl, stretch=1)
+        layout.addLayout(img_row)
+
+        layout.addSpacing(6)
+        layout.addWidget(self._section_lbl("Badge Rule Condition"))
+        layout.addWidget(self._caption("Stamp badge if condition is met:"))
+
+        # Column selection
+        layout.addWidget(self._caption("Data Column"))
+        self._badge_col_combo = QComboBox()
+        self._badge_col_combo.setStyleSheet(self._INPUT)
+        self._badge_col_combo.currentTextChanged.connect(self._on_badge_rule_edited)
+        layout.addWidget(self._badge_col_combo)
+
+        # Operator & Threshold Value row
+        rule_row = QHBoxLayout()
+        rule_row.setSpacing(6)
+
+        self._badge_op_combo = QComboBox()
+        self._badge_op_combo.setStyleSheet(self._INPUT)
+        self._badge_op_combo.addItems([">=", ">", "<=", "<", "==", "!="])
+        self._badge_op_combo.currentTextChanged.connect(self._on_badge_rule_edited)
+
+        self._badge_value_edit = QLineEdit()
+        self._badge_value_edit.setPlaceholderText("e.g. 90 or Distinction")
+        self._badge_value_edit.setStyleSheet(self._INPUT)
+        self._badge_value_edit.textChanged.connect(self._on_badge_rule_edited)
+
+        op_col = QVBoxLayout()
+        op_col.addWidget(self._caption("Operator"))
+        op_col.addWidget(self._badge_op_combo)
+
+        val_col = QVBoxLayout()
+        val_col.addWidget(self._caption("Value / Threshold"))
+        val_col.addWidget(self._badge_value_edit)
+
+        rule_row.addLayout(op_col, stretch=1)
+        rule_row.addLayout(val_col, stretch=2)
+        layout.addLayout(rule_row)
+
+    def _build_geometry_section(self, layout: QVBoxLayout) -> None:
+        layout.addSpacing(10)
+        layout.addWidget(self._section_lbl("Position & Dimensions"))
 
         xy = QHBoxLayout()
         xy.setSpacing(6)
@@ -333,7 +544,7 @@ class PropertiesPanel(QWidget):
         xy.addWidget(self._x_spin)
         xy.addWidget(self._caption("Y:"))
         xy.addWidget(self._y_spin)
-        self._form.addLayout(xy)
+        layout.addLayout(xy)
 
         wh = QHBoxLayout()
         wh.setSpacing(6)
@@ -349,11 +560,11 @@ class PropertiesPanel(QWidget):
         wh.addWidget(self._w_spin)
         wh.addWidget(self._caption("H:"))
         wh.addWidget(self._h_spin)
-        self._form.addLayout(wh)
+        layout.addLayout(wh)
 
-    def _build_actions_section(self) -> None:
-        self._form.addSpacing(12)
-        btn = QPushButton("🗑  Delete Field")
+    def _build_actions_section(self, layout: QVBoxLayout) -> None:
+        layout.addSpacing(12)
+        btn = QPushButton("🗑  Delete Selected Item")
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setStyleSheet("""
             QPushButton {
@@ -361,21 +572,88 @@ class PropertiesPanel(QWidget):
                 border: 1px solid #fca5a5; border-radius: 5px;
                 padding: 6px 12px; font-size: 12px; font-weight: 600;
             }
-            QPushButton:hover { background: #fecaca; }
+            QPushButton:hover { background: #fecaca; color: #991b1b; }
         """)
         btn.clicked.connect(self.delete_requested.emit)
-        self._form.addWidget(btn)
+        layout.addWidget(btn)
+
+    # ── Chart helper methods ──────────────────────────────────────────────────
+
+    def _rebuild_chart_checkboxes(self, columns: list[str]) -> None:
+        """Recreate chart column checkboxes from the given column list."""
+        # Remove & schedule deletion of existing checkboxes
+        for cb in self._chart_column_checkboxes.values():
+            self._chart_cols_layout.removeWidget(cb)
+            cb.deleteLater()
+        self._chart_column_checkboxes.clear()
+
+        if not columns:
+            self._chart_cols_placeholder.show()
+            return
+
+        self._chart_cols_placeholder.hide()
+
+        # Determine which columns are currently selected in the chart item
+        selected: set[str] = set()
+        if isinstance(self._item, ChartItem):
+            selected = set(self._item.chart_columns)
+
+        for col in columns:
+            cb = QCheckBox(col)
+            cb.setChecked(col in selected)
+            cb.setStyleSheet("font-size: 12px; color: #374151; padding: 1px 0;")
+            cb.toggled.connect(self._on_chart_column_toggled)
+            self._chart_column_checkboxes[col] = cb
+            self._chart_cols_layout.addWidget(cb)
+
+    def _on_chart_column_toggled(self, _checked: bool) -> None:
+        selected = [col for col, cb in self._chart_column_checkboxes.items() if cb.isChecked()]
+        self._chart_live(lambda: self.chart_columns_changed.emit(selected))
+
+    def _on_chart_style_changed(self, text: str) -> None:
+        style_map = {"Vertical Bars": "vertical", "Horizontal Bars": "horizontal"}
+        style = style_map.get(text, "vertical")
+        self._chart_live(lambda: self.chart_style_changed.emit(style))
+
+    # ── Badge helper methods ──────────────────────────────────────────────────
+
+    def _on_browse_badge_image(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Badge Image",
+            "",
+            "Images (*.png *.jpg *.jpeg *.svg *.webp);;All Files (*)",
+        )
+        if path:
+            self._badge_path_lbl.setText(os.path.basename(path))
+            self._badge_path_lbl.setStyleSheet("font-size: 11px; color: #374151; padding: 2px 0;")
+            self._badge_live(lambda: self.badge_image_changed.emit(path))
+
+    def _on_badge_rule_edited(self) -> None:
+        col = self._badge_col_combo.currentText().strip()
+        op = self._badge_op_combo.currentText().strip()
+        val = self._badge_value_edit.text().strip()
+        self._badge_live(lambda: self.badge_rule_changed.emit(col, op, val))
 
     # ── Private event helpers ─────────────────────────────────────────────────
 
     def _live(self, emit_fn) -> None:
+        """Emit signal only when not programmatically updating and an item is selected."""
         if not self._updating and self._item is not None:
             emit_fn()
 
+    def _chart_live(self, emit_fn) -> None:
+        """Emit signal only when not updating and a ChartItem is selected."""
+        if not self._updating and isinstance(self._item, ChartItem):
+            emit_fn()
+
+    def _badge_live(self, emit_fn) -> None:
+        """Emit signal only when not updating and a BadgeItem is selected."""
+        if not self._updating and isinstance(self._item, BadgeItem):
+            emit_fn()
+
     def _on_color_clicked(self) -> None:
-        col = QColorDialog.getColor(
-            QColor(self._color_hex), self, "Select Text Color"
-        )
+        col = QColorDialog.getColor(QColor(self._color_hex), self, "Select Text Color")
         if col.isValid():
             self._color_hex = col.name()
             self._sync_color_btn()

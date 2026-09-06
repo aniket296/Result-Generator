@@ -16,6 +16,7 @@ Features:
 """
 from __future__ import annotations
 
+import io
 import json
 import math
 import os
@@ -28,6 +29,15 @@ from PyQt6.QtCore import QMutex, QObject, QThread, QWaitCondition, pyqtSignal
 import pymupdf
 
 from utils.constants import RECOVERY_DIR
+
+# ── Optional matplotlib (Agg backend) for chart rendering ────────────────────
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    _MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    _MATPLOTLIB_AVAILABLE = False
 
 
 # ── Filename & Path Helpers ───────────────────────────────────────────────────
@@ -260,6 +270,173 @@ def _extract_field_value(f: dict[str, Any], row_data: dict[str, Any]) -> str:
     return s_val
 
 
+
+# ── Chart Image Renderer ──────────────────────────────────────────────────────
+
+def _render_chart_to_image(
+    chart_spec: dict[str, Any],
+    row_data: dict[str, Any],
+    width_px: int,
+    height_px: int,
+) -> bytes:
+    """
+    Render a per-student performance bar chart to PNG bytes using matplotlib.
+
+    Returns empty bytes if matplotlib is unavailable or columns are missing.
+    """
+    if not _MATPLOTLIB_AVAILABLE:
+        return b""
+
+    columns    = chart_spec.get("chart_columns", [])
+    chart_style = chart_spec.get("chart_style", "vertical")
+
+    if not columns:
+        return b""
+
+    # ── Extract numeric values ────────────────────────────────────────────
+    labels: list[str] = []
+    values: list[float] = []
+    for col in columns:
+        raw = row_data.get(col, "") or ""
+        try:
+            str_raw = str(raw).strip().replace(",", "")
+            if str_raw.lower() in ("", "nan", "none", "<na>", "n/a"):
+                val = 0.0
+            else:
+                val = float(str_raw)
+            if math.isnan(val) or math.isinf(val):
+                val = 0.0
+        except (ValueError, TypeError):
+            val = 0.0
+        labels.append(str(col))
+        values.append(val)
+
+    # ── Figure setup ──────────────────────────────────────────────────────
+    dpi   = 96
+    fig_w = max(1.0, width_px  / dpi)
+    fig_h = max(1.0, height_px / dpi)
+
+    _COLORS = [
+        "#4f7ef8", "#10b981", "#f59e0b", "#ef4444",
+        "#8b5cf6", "#06b6d4", "#ec4899", "#14b8a6",
+    ]
+    bar_colors = [_COLORS[i % len(_COLORS)] for i in range(len(labels))]
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=dpi)
+    fig.patch.set_alpha(0.0)
+    ax.set_facecolor("white")
+
+    # ── Draw bars ─────────────────────────────────────────────────────────
+    if chart_style == "horizontal":
+        bars = ax.barh(labels, values, color=bar_colors, height=0.55, edgecolor="none")
+        ax.set_xlabel("Score", fontsize=8)
+        ax.set_xlim(left=0)
+        ax.xaxis.set_tick_params(labelsize=7)
+        ax.yaxis.set_tick_params(labelsize=7)
+        for bar, val in zip(bars, values):
+            if val > 0:
+                ax.text(
+                    bar.get_width() + max(0.5, ax.get_xlim()[1] * 0.01),
+                    bar.get_y() + bar.get_height() / 2,
+                    f"{val:.0f}",
+                    va="center", ha="left", fontsize=7, color="#374151",
+                )
+    else:
+        bars = ax.bar(labels, values, color=bar_colors, width=0.55, edgecolor="none")
+        ax.set_ylabel("Score", fontsize=8)
+        ax.set_ylim(bottom=0)
+        ax.xaxis.set_tick_params(labelsize=7, rotation=20)
+        ax.yaxis.set_tick_params(labelsize=7)
+        for bar, val in zip(bars, values):
+            if val > 0:
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    bar.get_height() + max(0.5, ax.get_ylim()[1] * 0.01),
+                    f"{val:.0f}",
+                    ha="center", va="bottom", fontsize=7, color="#374151",
+                )
+
+    # ── Styling ───────────────────────────────────────────────────────────
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    for spine in ("left", "bottom"):
+        ax.spines[spine].set_alpha(0.3)
+    ax.tick_params(colors="#374151")
+
+    # ── Save to bytes and close ───────────────────────────────────────────
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight", transparent=True)
+    plt.close("all")
+    buf.seek(0)
+    return buf.getvalue()
+
+
+# ── Badge Rule Evaluator ──────────────────────────────────────────────────────
+
+def _evaluate_badge_rule(
+    column: str,
+    operator: str,
+    threshold: str,
+    row_data: dict[str, Any],
+) -> bool:
+    """
+    Evaluate if a student record meets the condition for a badge to be displayed.
+    Handles numeric values, percentages, and string equality comparisons.
+    """
+    if not column:
+        return False
+
+    raw_val = _extract_field_value({"mapped_column": column, "label": column}, row_data)
+    if not raw_val:
+        # Empty values: only match == "" or != "something"
+        t_str = str(threshold).strip()
+        if operator == "==":
+            return t_str == ""
+        elif operator == "!=":
+            return t_str != ""
+        return False
+
+    s_clean = str(raw_val).strip().rstrip("%").strip().replace(",", "")
+    t_clean = str(threshold).strip().rstrip("%").strip().replace(",", "")
+
+    # Try numeric comparison first
+    try:
+        s_num = float(s_clean)
+        t_num = float(t_clean)
+        if operator == ">=":
+            return s_num >= t_num
+        elif operator == ">":
+            return s_num > t_num
+        elif operator == "<=":
+            return s_num <= t_num
+        elif operator == "<":
+            return s_num < t_num
+        elif operator == "==":
+            return s_num == t_num
+        elif operator == "!=":
+            return s_num != t_num
+    except (ValueError, TypeError):
+        pass
+
+    # Fallback: case-insensitive string comparison
+    s_low = str(raw_val).strip().lower()
+    t_low = str(threshold).strip().lower()
+    if operator == "==":
+        return s_low == t_low
+    elif operator == "!=":
+        return s_low != t_low
+    elif operator == ">=":
+        return s_low >= t_low
+    elif operator == ">":
+        return s_low > t_low
+    elif operator == "<=":
+        return s_low <= t_low
+    elif operator == "<":
+        return s_low < t_low
+
+    return False
+
+
 # ── Single PDF Generator ─────────────────────────────────────────────────────
 
 def generate_single_pdf(
@@ -390,6 +567,60 @@ def generate_single_pdf(
                     if alt_rc >= 0:
                         break
 
+    # ── Render chart placeholders ─────────────────────────────────────────────
+    charts = template_state.get("charts", [])
+    for chart_spec in charts:
+        col_key     = chart_spec.get("label", "Performance Chart")
+        cx0         = max(0.0, float(chart_spec.get("x",      0.0)) * scale_x)
+        cy0         = max(0.0, float(chart_spec.get("y",      0.0)) * scale_y)
+        cw          = max(10.0, float(chart_spec.get("width",  300.0)) * scale_x)
+        ch          = max(10.0, float(chart_spec.get("height", 200.0)) * scale_y)
+
+        chart_rect = pymupdf.Rect(cx0, cy0, cx0 + cw, cy0 + ch)
+
+        print(
+            f"[DEBUG CHART] '{col_key}' | Pos: ({cx0:.1f}, {cy0:.1f}) "
+            f"| Dim: ({cw:.1f}×{ch:.1f}) | Cols: {chart_spec.get('chart_columns', [])}"
+        )
+
+        try:
+            png_bytes = _render_chart_to_image(chart_spec, row_data, int(cw), int(ch))
+            if png_bytes:
+                page.insert_image(chart_rect, stream=png_bytes)
+        except Exception as chart_err:
+            print(f"[DEBUG CHART] Render error for '{col_key}': {chart_err}")
+
+    # ── Render conditional image badges ───────────────────────────────────────
+    badges = template_state.get("badges", [])
+    for badge_spec in badges:
+        label      = badge_spec.get("label", "Badge")
+        badge_path = badge_spec.get("badge_image_path", "")
+        rule_col   = badge_spec.get("rule_column", "")
+        rule_op    = badge_spec.get("rule_operator", ">=")
+        rule_val   = badge_spec.get("rule_value", "0")
+
+        bx0 = max(0.0, float(badge_spec.get("x",      0.0)) * scale_x)
+        by0 = max(0.0, float(badge_spec.get("y",      0.0)) * scale_y)
+        bw  = max(10.0, float(badge_spec.get("width",  100.0)) * scale_x)
+        bh  = max(10.0, float(badge_spec.get("height", 100.0)) * scale_y)
+
+        badge_rect = pymupdf.Rect(bx0, by0, bx0 + bw, by0 + bh)
+
+        is_match = _evaluate_badge_rule(rule_col, rule_op, rule_val, row_data)
+        print(
+            f"[DEBUG BADGE] '{label}' | Rule: '{rule_col}' {rule_op} '{rule_val}' "
+            f"| Match: {is_match} | Pos: ({bx0:.1f}, {by0:.1f}) | File: '{badge_path}'"
+        )
+
+        if is_match:
+            if badge_path and os.path.exists(badge_path):
+                try:
+                    page.insert_image(badge_rect, filename=badge_path)
+                except Exception as badge_err:
+                    print(f"[DEBUG BADGE] Insert error for '{label}': {badge_err}")
+            else:
+                print(f"[DEBUG BADGE] Image not found or path empty: '{badge_path}'")
+
     # Stamp internal template identity in metadata
     doc.set_metadata({
         "keywords": f"TeacherResultSoftware:{template_id}",
@@ -398,6 +629,63 @@ def generate_single_pdf(
 
     doc.save(output_path, garbage=4, deflate=True)
     doc.close()
+
+
+# ── Smart Class-Wise Print Bundling ──────────────────────────────────────────
+
+def create_class_print_bundles(
+    output_dir: str,
+    student_mappings: list[tuple[dict[str, str], str]],
+    group_col: str,
+) -> list[str]:
+    """
+    Groups generated individual student PDFs by class/section and merges them
+    into master class-wise print bundles saved in output_dir/Print_Bundles.
+
+    Returns a list of created master print bundle file paths.
+    """
+    if not student_mappings or not group_col:
+        return []
+
+    bundle_dir = os.path.join(output_dir, "Print_Bundles")
+    os.makedirs(bundle_dir, exist_ok=True)
+
+    # Group student PDF paths by class value
+    groups: dict[str, list[str]] = {}
+    for row, pdf_path in student_mappings:
+        raw_group = str(row.get(group_col, "") or "").strip()
+        class_key = raw_group if raw_group else "Unassigned"
+        if class_key not in groups:
+            groups[class_key] = []
+        if os.path.exists(pdf_path):
+            groups[class_key].append(pdf_path)
+
+    created_bundles: list[str] = []
+    for class_name, pdf_files in groups.items():
+        if not pdf_files:
+            continue
+
+        master_doc = pymupdf.open()
+        try:
+            for pdf_path in pdf_files:
+                try:
+                    student_doc = pymupdf.open(pdf_path)
+                    master_doc.insert_pdf(student_doc)
+                    student_doc.close()
+                except Exception as merge_err:
+                    print(f"[DEBUG BUNDLE] Failed to merge {pdf_path} into {class_name}: {merge_err}")
+
+            if master_doc.page_count > 0:
+                safe_class = sanitize_filename_part(class_name)
+                bundle_filename = f"Class_{safe_class}_Master_Print.pdf"
+                bundle_path = os.path.join(bundle_dir, bundle_filename)
+                master_doc.save(bundle_path, garbage=4, deflate=True)
+                created_bundles.append(bundle_path)
+                print(f"[DEBUG BUNDLE] Created bundle: '{bundle_path}' ({master_doc.page_count} pages)")
+        finally:
+            master_doc.close()
+
+    return created_bundles
 
 
 # ── Generator Worker (QThread) ───────────────────────────────────────────────
@@ -429,6 +717,8 @@ class GeneratorWorker(QThread):
         name_col: str,
         parent: QObject | None = None,
         operation_id: str | None = None,
+        bundle_enabled: bool = False,
+        bundle_col: str = "",
     ) -> None:
         super().__init__(parent)
         self.template_state = template_state
@@ -437,6 +727,19 @@ class GeneratorWorker(QThread):
         self.unique_col = unique_col
         self.name_col = name_col
         self.operation_id = operation_id or uuid.uuid4().hex[:12]
+        self.bundle_enabled = bundle_enabled
+        self.bundle_col = bundle_col
+
+        self._cancelled = False
+        self._mutex = QMutex()
+        self._wait_condition = QWaitCondition()
+        self._error_action = self.ACTION_SKIP
+
+        self.retry_counts: dict[int, int] = {}
+        self.generated_files: list[str] = []
+        self.successful_records: list[tuple[dict[str, str], str]] = []
+        self.created_bundles: list[str] = []
+        self.failed_records: list[dict[str, Any]] = []
 
         self._cancelled = False
         self._mutex = QMutex()
@@ -565,6 +868,7 @@ class GeneratorWorker(QThread):
             try:
                 generate_single_pdf(self.template_state, row, out_file)
                 self.generated_files.append(out_file)
+                self.successful_records.append((row, out_file))
                 generated_count += 1
                 self.record_succeeded.emit(row_num, out_file)
                 idx += 1
@@ -603,6 +907,18 @@ class GeneratorWorker(QThread):
                         idx += 1
 
             self._save_recovery_state(idx, generated_count, skipped_count, len(self.failed_records))
+
+        # ── Post-Processing: Smart Class-Wise Print Bundling ──────────────────
+        if self.bundle_enabled and self.bundle_col and self.successful_records and not self._cancelled:
+            self.progress.emit(
+                total, total, 99, "Print_Bundles", "Creating Class-Wise Print Bundles..."
+            )
+            try:
+                self.created_bundles = create_class_print_bundles(
+                    self.output_dir, self.successful_records, self.bundle_col
+                )
+            except Exception as bundle_err:
+                print(f"[DEBUG BUNDLE] Bundling process error: {bundle_err}")
 
         # Successful completion -> remove recovery file
         if os.path.exists(self.recovery_file):

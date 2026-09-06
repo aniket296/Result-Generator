@@ -1,4 +1,4 @@
-﻿# -*- mode: python ; coding: utf-8 -*-
+# -*- mode: python ; coding: utf-8 -*-
 import sys
 import os
 
@@ -19,13 +19,17 @@ a = Analysis(
         'PyQt6.QtGui',
         'PyQt6.QtWidgets',
         'PyQt6.QtPrintSupport',
+        'matplotlib',
+        'matplotlib.pyplot',
+        'matplotlib.figure',
+        'matplotlib.backends.backend_agg',
+        'matplotlib.backends.backend_pdf',
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
         'tkinter',
-        'matplotlib',
         'scipy',
         'IPython',
         'notebook',

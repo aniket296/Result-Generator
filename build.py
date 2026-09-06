@@ -1,4 +1,4 @@
-﻿"""
+"""
 Build & Packaging Script for Teacher Result Management System.
 Packages the offline PyQt6 desktop app into a standalone Windows executable.
 
@@ -51,8 +51,13 @@ def run_build(onefile=False):
             "--hidden-import=PyQt6.QtCore",
             "--hidden-import=PyQt6.QtGui",
             "--hidden-import=PyQt6.QtWidgets",
+            "--hidden-import=PyQt6.QtPrintSupport",
+            "--hidden-import=matplotlib",
+            "--hidden-import=matplotlib.pyplot",
+            "--hidden-import=matplotlib.figure",
+            "--hidden-import=matplotlib.backends.backend_agg",
+            "--hidden-import=matplotlib.backends.backend_pdf",
             "--exclude-module=tkinter",
-            "--exclude-module=matplotlib",
             "--exclude-module=scipy",
             "--exclude-module=IPython",
             "main.py"

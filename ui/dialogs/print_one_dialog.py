@@ -156,10 +156,11 @@ class PrintOneDialog(QDialog):
         self._save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._save_btn.setStyleSheet("""
             QPushButton {
-                background: #f3f4f6; color: #374151; border: 1px solid #d1d5db;
+                background: #ffffff; color: #374151; border: 1px solid #d1d5db;
                 border-radius: 5px; padding: 7px 14px; font-weight: 600;
             }
-            QPushButton:hover { background: #e5e7eb; }
+            QPushButton:hover { background: #f3f4f6; color: #111827; }
+            QPushButton:disabled { background: #f3f4f6; color: #9ca3af; border-color: #e5e7eb; }
         """)
         self._save_btn.clicked.connect(self._on_save_pdf)
 
@@ -171,7 +172,8 @@ class PrintOneDialog(QDialog):
                 background: #10b981; color: white; border: none;
                 border-radius: 5px; padding: 7px 18px; font-weight: 700;
             }
-            QPushButton:hover { background: #059669; }
+            QPushButton:hover { background: #059669; color: white; }
+            QPushButton:disabled { background: #d1d5db; color: #9ca3af; }
         """)
         self._print_btn.clicked.connect(self._on_print)
 
@@ -179,10 +181,10 @@ class PrintOneDialog(QDialog):
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.setStyleSheet("""
             QPushButton {
-                background: #f3f4f6; color: #374151; border: 1px solid #d1d5db;
-                border-radius: 5px; padding: 7px 14px;
+                background: #ffffff; color: #374151; border: 1px solid #d1d5db;
+                border-radius: 5px; padding: 7px 14px; font-weight: 500;
             }
-            QPushButton:hover { background: #e5e7eb; }
+            QPushButton:hover { background: #f3f4f6; color: #111827; }
         """)
         close_btn.clicked.connect(self.reject)
 

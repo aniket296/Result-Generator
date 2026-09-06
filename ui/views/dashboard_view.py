@@ -1,4 +1,4 @@
-﻿"""
+"""
 Dashboard view – Dataset management, header inspection, validation, printing & batch generation.
 """
 from __future__ import annotations
@@ -8,6 +8,8 @@ from typing import Any
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
     QFileDialog,
     QFrame,
     QGroupBox,
@@ -103,10 +105,11 @@ class DashboardView(QWidget):
         self._export_backup_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._export_backup_btn.setStyleSheet("""
             QPushButton {
-                background-color: #f3f4f6; color: #374151; border: 1px solid #d1d5db;
+                background-color: #ffffff; color: #374151; border: 1px solid #d1d5db;
                 border-radius: 6px; padding: 0 16px; font-size: 13px; font-weight: 600;
             }
-            QPushButton:hover { background-color: #e5e7eb; }
+            QPushButton:hover { background-color: #f3f4f6; color: #111827; }
+            QPushButton:disabled { background-color: #f3f4f6; color: #9ca3af; border-color: #e5e7eb; }
         """)
         self._export_backup_btn.clicked.connect(self._on_export_backup)
 
@@ -175,10 +178,10 @@ class DashboardView(QWidget):
         p1_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         p1_btn.setStyleSheet("""
             QPushButton {
-                background: #f3f4f6; color: #1f2937; border: 1px solid #d1d5db;
+                background: #ffffff; color: #1f2937; border: 1px solid #d1d5db;
                 border-radius: 5px; padding: 0 14px; font-weight: 600; font-size: 12px;
             }
-            QPushButton:hover { background: #e5e7eb; }
+            QPushButton:hover { background: #f3f4f6; color: #111827; }
         """)
         p1_btn.clicked.connect(self.print_one_requested.emit)
 
@@ -187,10 +190,10 @@ class DashboardView(QWidget):
         pall_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         pall_btn.setStyleSheet("""
             QPushButton {
-                background: #f3f4f6; color: #1f2937; border: 1px solid #d1d5db;
+                background: #ffffff; color: #1f2937; border: 1px solid #d1d5db;
                 border-radius: 5px; padding: 0 14px; font-weight: 600; font-size: 12px;
             }
-            QPushButton:hover { background: #e5e7eb; }
+            QPushButton:hover { background: #f3f4f6; color: #111827; }
         """)
         pall_btn.clicked.connect(self.print_all_requested.emit)
 
@@ -199,10 +202,10 @@ class DashboardView(QWidget):
         gen_all_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         gen_all_btn.setStyleSheet("""
             QPushButton {
-                background: #4f7ef8; color: white; border: none;
+                background: #4f7ef8; color: #ffffff; border: none;
                 border-radius: 5px; padding: 0 18px; font-weight: 700; font-size: 12px;
             }
-            QPushButton:hover { background: #3b6ef0; }
+            QPushButton:hover { background: #3b6ef0; color: #ffffff; }
         """)
         gen_all_btn.clicked.connect(self.generate_requested.emit)
 
@@ -211,6 +214,45 @@ class DashboardView(QWidget):
         ops_row.addStretch()
         ops_row.addWidget(gen_all_btn)
         v.addWidget(ops_group)
+
+        # Class-Wise Print Bundling
+        bundle_box = QGroupBox("Print Bundling")
+        bundle_box.setStyleSheet("""
+            QGroupBox {
+                font-size: 13px; font-weight: 700; color: #1a1a2e;
+                border: 1px solid #e5e7eb; border-radius: 8px;
+                padding-top: 14px; background: white;
+            }
+        """)
+        bundle_layout = QHBoxLayout(bundle_box)
+        bundle_layout.setContentsMargins(14, 10, 14, 10)
+        bundle_layout.setSpacing(12)
+
+        self._bundle_cb = QCheckBox("Generate Class-Wise Print Bundles")
+        self._bundle_cb.setStyleSheet("font-size: 12px; font-weight: 600; color: #1d4ed8;")
+        self._bundle_cb.toggled.connect(self._on_bundle_toggled)
+
+        self._bundle_col_lbl = QLabel("Group by Column:")
+        self._bundle_col_lbl.setStyleSheet("font-size: 12px; color: #374151;")
+
+        self._bundle_col_combo = QComboBox()
+        self._bundle_col_combo.setStyleSheet("""
+            QComboBox {
+                border: 1px solid #d1d5db; border-radius: 4px;
+                padding: 4px 8px; font-size: 12px; background: white; color: #000000;
+            }
+        """)
+
+        bundle_layout.addWidget(self._bundle_cb)
+        bundle_layout.addSpacing(16)
+        bundle_layout.addWidget(self._bundle_col_lbl)
+        bundle_layout.addWidget(self._bundle_col_combo)
+        bundle_layout.addStretch()
+
+        self._bundle_col_lbl.hide()
+        self._bundle_col_combo.hide()
+
+        v.addWidget(bundle_box)
 
         # Columns + Validation
         cols_row = QHBoxLayout()
@@ -306,10 +348,10 @@ class DashboardView(QWidget):
         val_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         val_btn.setStyleSheet("""
             QPushButton {
-                background: #f3f4f6; color: #374151; border: 1px solid #d1d5db;
+                background: #ffffff; color: #374151; border: 1px solid #d1d5db;
                 border-radius: 5px; padding: 8px 14px; font-weight: 600; font-size: 12px;
             }
-            QPushButton:hover { background: #e5e7eb; }
+            QPushButton:hover { background: #f3f4f6; color: #111827; }
         """)
         val_btn.clicked.connect(self._on_validate_data)
         layout.addWidget(val_btn)
@@ -398,11 +440,28 @@ class DashboardView(QWidget):
         for h in headers:
             self._headers_list.addItem(QListWidgetItem(f"•  {h}"))
 
+        # Populate bundle column combo
+        self._bundle_col_combo.clear()
+        for h in headers:
+            self._bundle_col_combo.addItem(h)
+        for cand in ["Class", "Standard", "Sec", "Section", "Grade", "Group", "Branch"]:
+            idx = self._bundle_col_combo.findText(cand, Qt.MatchFlag.MatchContains)
+            if idx >= 0:
+                self._bundle_col_combo.setCurrentIndex(idx)
+                break
+
         self._export_backup_btn.setEnabled(True)
         self._empty_state.hide()
         self._loaded_state.show()
 
         self.excel_loaded.emit(headers)
+
+    def _on_bundle_toggled(self, checked: bool) -> None:
+        self._bundle_col_lbl.setVisible(checked)
+        self._bundle_col_combo.setVisible(checked)
+
+    def get_bundle_options(self) -> tuple[bool, str]:
+        return self._bundle_cb.isChecked(), self._bundle_col_combo.currentText()
 
     def _on_clear(self) -> None:
         self._headers = []

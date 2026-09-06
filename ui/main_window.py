@@ -266,12 +266,16 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No Data", "Please load an Excel dataset first.")
             return
 
+        dash_bundle_enabled, dash_bundle_col = self._dashboard_view.get_bundle_options()
+
         # 1. Setup Dialog
         setup_dlg = GenerationSetupDialog(
             template_state.get("template_name", "Result"),
             headers,
             rows,
             self,
+            init_bundle_enabled=dash_bundle_enabled,
+            init_bundle_col=dash_bundle_col,
         )
         if setup_dlg.exec() != GenerationSetupDialog.DialogCode.Accepted:
             return
@@ -279,6 +283,8 @@ class MainWindow(QMainWindow):
         out_dir = setup_dlg.selected_dir
         u_col = setup_dlg.unique_column
         n_col = setup_dlg.name_column
+        bundle_enabled = setup_dlg.bundle_enabled
+        bundle_col = setup_dlg.bundle_column
 
         # 2. Worker Thread & Live Dashboard
         worker = GeneratorWorker(
@@ -288,6 +294,8 @@ class MainWindow(QMainWindow):
             unique_col=u_col,
             name_col=n_col,
             parent=self,
+            bundle_enabled=bundle_enabled,
+            bundle_col=bundle_col,
         )
 
         prog_dlg = GenerationProgressDialog(worker, len(rows), self)
@@ -303,6 +311,7 @@ class MainWindow(QMainWindow):
                 failed_records=prog_dlg.failed_records,
                 template_state=template_state,
                 parent=self,
+                created_bundles=prog_dlg.created_bundles,
             )
             comp_dlg.exec()
 

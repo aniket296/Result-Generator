@@ -53,7 +53,7 @@ def _make_lbl(text: str, style: str = "") -> QLabel:
 # ═════════════════════════════════════════════════════════════════════════════
 
 class GenerationSetupDialog(QDialog):
-    """Configuration dialog with live filename preview and validation."""
+    """Configuration dialog with live filename preview, validation, and print bundling."""
 
     def __init__(
         self,
@@ -61,26 +61,38 @@ class GenerationSetupDialog(QDialog):
         headers: list[str],
         rows: list[dict[str, str]],
         parent=None,
+        init_bundle_enabled: bool = False,
+        init_bundle_col: str = "",
     ) -> None:
         super().__init__(parent)
         self.template_name = template_name or "Result"
         self.headers = headers
         self.rows = rows
+        self.init_bundle_enabled = init_bundle_enabled
+        self.init_bundle_col = init_bundle_col
 
         self.selected_dir: str = os.path.join(os.path.expanduser("~"), "Desktop")
         self.unique_column: str = ""
         self.name_column: str = ""
 
         self.setWindowTitle("Result Generation Setup")
-        self.setFixedSize(620, 580)
+        self.setFixedSize(620, 640)
         self.setModal(True)
         self._build_ui()
         self._update_preview()
 
+    @property
+    def bundle_enabled(self) -> bool:
+        return self._bundle_cb.isChecked()
+
+    @property
+    def bundle_column(self) -> str:
+        return self._bundle_combo.currentText()
+
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 20)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
 
         # Title
         title = QLabel("⚙️ Result Generation Setup")
@@ -108,10 +120,10 @@ class GenerationSetupDialog(QDialog):
         browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         browse_btn.setStyleSheet("""
             QPushButton {
-                background: #f3f4f6; color: #374151; border: 1px solid #d1d5db;
+                background: #ffffff; color: #374151; border: 1px solid #d1d5db;
                 border-radius: 4px; padding: 6px 12px; font-size: 12px; font-weight: 600;
             }
-            QPushButton:hover { background: #e5e7eb; }
+            QPushButton:hover { background: #f3f4f6; color: #111827; }
         """)
         browse_btn.clicked.connect(self._on_browse)
         folder_row.addWidget(browse_btn)
@@ -120,7 +132,7 @@ class GenerationSetupDialog(QDialog):
         # Auto subfolder option
         self._subfolder_cb = QCheckBox("Create timestamped subfolder (e.g. Template_2026-08-31_2215)")
         self._subfolder_cb.setChecked(True)
-        self._subfolder_cb.setStyleSheet("font-size: 11px; color: #4b5563; margin-bottom: 4px;")
+        self._subfolder_cb.setStyleSheet("font-size: 11px; color: #4b5563; margin-bottom: 2px;")
         self._subfolder_cb.toggled.connect(self._update_preview)
         layout.addWidget(self._subfolder_cb)
 
@@ -130,11 +142,11 @@ class GenerationSetupDialog(QDialog):
             QGroupBox {
                 font-size: 12px; font-weight: 600; color: #374151;
                 border: 1px solid #e5e7eb; border-radius: 6px;
-                margin-top: 6px; padding: 10px;
+                margin-top: 4px; padding: 8px 10px;
             }
         """)
         c_layout = QVBoxLayout(cols_box)
-        c_layout.setSpacing(8)
+        c_layout.setSpacing(6)
 
         # Unique Col
         u_row = QHBoxLayout()
@@ -174,6 +186,52 @@ class GenerationSetupDialog(QDialog):
 
         layout.addWidget(cols_box)
 
+        # Print Bundling Options Box
+        bundle_box = QGroupBox("Print Bundling Options")
+        bundle_box.setStyleSheet("""
+            QGroupBox {
+                font-size: 12px; font-weight: 600; color: #374151;
+                border: 1px solid #e5e7eb; border-radius: 6px;
+                margin-top: 4px; padding: 8px 10px;
+            }
+        """)
+        b_layout = QHBoxLayout(bundle_box)
+        b_layout.setSpacing(8)
+
+        self._bundle_cb = QCheckBox("Generate Class-Wise Print Bundles")
+        self._bundle_cb.setChecked(self.init_bundle_enabled)
+        self._bundle_cb.setStyleSheet("font-size: 11px; color: #1d4ed8; font-weight: 600;")
+        self._bundle_cb.toggled.connect(self._on_bundle_toggled)
+
+        self._bundle_col_lbl = QLabel("Grouping Column:")
+        self._bundle_col_lbl.setStyleSheet("font-size: 11px; color: #374151;")
+
+        self._bundle_combo = QComboBox()
+        self._bundle_combo.setStyleSheet("color: #000000; background: white; padding: 4px;")
+        for h in self.headers:
+            self._bundle_combo.addItem(h)
+
+        if self.init_bundle_col:
+            idx = self._bundle_combo.findText(self.init_bundle_col)
+            if idx >= 0:
+                self._bundle_combo.setCurrentIndex(idx)
+        else:
+            for cand in ["Class", "Standard", "Sec", "Section", "Grade", "Group", "Branch"]:
+                idx = self._bundle_combo.findText(cand, Qt.MatchFlag.MatchContains)
+                if idx >= 0:
+                    self._bundle_combo.setCurrentIndex(idx)
+                    break
+
+        b_layout.addWidget(self._bundle_cb)
+        b_layout.addSpacing(10)
+        b_layout.addWidget(self._bundle_col_lbl)
+        b_layout.addWidget(self._bundle_combo, stretch=1)
+
+        self._bundle_col_lbl.setVisible(self.init_bundle_enabled)
+        self._bundle_combo.setVisible(self.init_bundle_enabled)
+
+        layout.addWidget(bundle_box)
+
         # Filename Preview Group
         prev_box = QGroupBox("Generated Filename Preview")
         prev_box.setStyleSheet("""
@@ -198,10 +256,10 @@ class GenerationSetupDialog(QDialog):
         cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         cancel_btn.setStyleSheet("""
             QPushButton {
-                background: #f3f4f6; color: #374151; border: 1px solid #d1d5db;
-                border-radius: 5px; padding: 7px 16px; font-size: 12px;
+                background: #ffffff; color: #374151; border: 1px solid #d1d5db;
+                border-radius: 5px; padding: 7px 16px; font-size: 12px; font-weight: 500;
             }
-            QPushButton:hover { background: #e5e7eb; }
+            QPushButton:hover { background: #f3f4f6; color: #111827; }
         """)
         cancel_btn.clicked.connect(self.reject)
 
@@ -209,16 +267,20 @@ class GenerationSetupDialog(QDialog):
         start_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         start_btn.setStyleSheet("""
             QPushButton {
-                background: #10b981; color: white; border: none;
+                background: #10b981; color: #ffffff; border: none;
                 border-radius: 5px; padding: 7px 20px; font-size: 13px; font-weight: 700;
             }
-            QPushButton:hover { background: #059669; }
+            QPushButton:hover { background: #059669; color: #ffffff; }
         """)
         start_btn.clicked.connect(self._on_start)
 
         btn_row.addWidget(cancel_btn)
         btn_row.addWidget(start_btn)
         layout.addLayout(btn_row)
+
+    def _on_bundle_toggled(self, checked: bool) -> None:
+        self._bundle_col_lbl.setVisible(checked)
+        self._bundle_combo.setVisible(checked)
 
     def _on_browse(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Select Output Directory", self.selected_dir)
@@ -283,6 +345,7 @@ class GenerationProgressDialog(QDialog):
         self.skipped_count = 0
         self.failed_count = 0
         self.output_directory = ""
+        self.created_bundles: list[str] = []
         self.failed_records: list[dict[str, Any]] = []
 
         self.setWindowTitle("Generating Results...")
@@ -412,6 +475,7 @@ class GenerationProgressDialog(QDialog):
         self.failed_count = fail
         self.output_directory = out_dir
         self.failed_records = failed_records
+        self.created_bundles = list(self.worker.created_bundles)
         self.accept()
 
 
@@ -431,6 +495,7 @@ class GenerationCompletedDialog(QDialog):
         failed_records: list[dict[str, Any]],
         template_state: dict[str, Any],
         parent=None,
+        created_bundles: list[str] | None = None,
     ) -> None:
         super().__init__(parent)
         self.generated = generated
@@ -439,9 +504,10 @@ class GenerationCompletedDialog(QDialog):
         self.output_dir = output_dir
         self.failed_records = failed_records
         self.template_state = template_state
+        self.created_bundles = created_bundles or []
 
         self.setWindowTitle("Generation Summary")
-        self.setFixedSize(540, 380)
+        self.setFixedSize(540, 420)
         self.setModal(True)
         self._build_ui()
 
@@ -470,6 +536,15 @@ class GenerationCompletedDialog(QDialog):
         c_layout.setSpacing(6)
         _lbl_style = "font-size: 13px; color: #111827;"
         c_layout.addWidget(_make_lbl(f"• <b>Successfully Generated:</b> {self.generated} results", _lbl_style))
+        if self.created_bundles:
+            c_layout.addWidget(_make_lbl(
+                f"• <b>Class Print Bundles:</b> {len(self.created_bundles)} master print bundles created in <i>Print_Bundles</i> folder.",
+                _lbl_style,
+            ))
+            c_layout.addWidget(_make_lbl(
+                f"✨ <i>Individual PDFs generated, plus {len(self.created_bundles)} class print bundles created.</i>",
+                "font-size: 12px; color: #059669; font-weight: 600; padding: 2px 0;",
+            ))
         c_layout.addWidget(_make_lbl(f"• <b>Skipped Records:</b> {self.skipped}", _lbl_style))
         c_layout.addWidget(_make_lbl(f"• <b>Failed Records:</b> {self.failed}", _lbl_style))
         c_layout.addWidget(_make_lbl(
@@ -513,10 +588,10 @@ class GenerationCompletedDialog(QDialog):
         continue_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         continue_btn.setStyleSheet("""
             QPushButton {
-                background: #f3f4f6; color: #374151; border: 1px solid #d1d5db;
+                background: #ffffff; color: #374151; border: 1px solid #d1d5db;
                 border-radius: 5px; padding: 8px 18px; font-weight: 600; font-size: 12px;
             }
-            QPushButton:hover { background: #e5e7eb; }
+            QPushButton:hover { background: #f3f4f6; color: #111827; }
         """)
         continue_btn.clicked.connect(self.accept)
         btn_row.addWidget(continue_btn)
@@ -590,9 +665,10 @@ class FailedRecordsDialog(QDialog):
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.setStyleSheet("""
             QPushButton {
-                background: #f3f4f6; color: #374151; border: 1px solid #d1d5db;
-                border-radius: 4px; padding: 6px 14px;
+                background: #ffffff; color: #374151; border: 1px solid #d1d5db;
+                border-radius: 4px; padding: 6px 14px; font-weight: 500;
             }
+            QPushButton:hover { background: #f3f4f6; color: #111827; }
         """)
         close_btn.clicked.connect(self.accept)
         btn_row.addWidget(close_btn)
