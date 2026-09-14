@@ -509,20 +509,39 @@ def generate_single_pdf(
         elif align_str == "Right":
             align_code = 2
 
-        font_name = "helv"
+        font_family_lower = str(f.get("font_family", "")).lower()
+        if "times" in font_family_lower or "serif" in font_family_lower:
+            font_base = "ti"
+        elif "courier" in font_family_lower or "mono" in font_family_lower:
+            font_base = "co"
+        else:
+            font_base = "he"
+
         bold = f.get("bold", False)
         italic = f.get("italic", False)
-        if bold and italic:
-            font_name = "hebi"
-        elif bold:
-            font_name = "hebo"
-        elif italic:
-            font_name = "heit"
+        if font_base == "ti":
+            font_name = "tibi" if (bold and italic) else ("tibo" if bold else ("tiit" if italic else "tiro"))
+        elif font_base == "co":
+            font_name = "cobi" if (bold and italic) else ("cobo" if bold else ("coit" if italic else "cour"))
+        else:
+            font_name = "hebi" if (bold and italic) else ("hebo" if bold else ("heit" if italic else "helv"))
 
-        # Provide ample vertical headroom so tight bounding boxes don't cause PyMuPDF to drop text
+        # Vertical alignment calculation
+        v_align = f.get("v_alignment", "Top")
         is_multiline = f.get("multiline", False)
-        effective_h = max(h, font_size * 1.5) if not is_multiline else h
-        box_rect = pymupdf.Rect(x0, y0, x0 + w, y0 + effective_h)
+        y_box_top = y0
+
+        if not is_multiline:
+            line_h = font_size * 1.15
+            if v_align == "Middle":
+                y_box_top = y0 + max(0.0, (h - line_h) / 2.0)
+            elif v_align == "Bottom":
+                y_box_top = y0 + max(0.0, h - line_h)
+            effective_h = max(h - (y_box_top - y0), font_size * 1.5)
+        else:
+            effective_h = h
+
+        box_rect = pymupdf.Rect(x0, y_box_top, x0 + w, y_box_top + effective_h)
 
         # Insert textbox with PyMuPDF
         rc = page.insert_textbox(
@@ -547,7 +566,7 @@ def generate_single_pdf(
                 else:
                     pt_x = x0
                 page.insert_text(
-                    pymupdf.Point(pt_x, y0 + font_size * 0.9),
+                    pymupdf.Point(pt_x, y_box_top + font_size * 0.85),
                     text_val,
                     fontsize=font_size,
                     fontname=font_name,

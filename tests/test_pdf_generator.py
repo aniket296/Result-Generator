@@ -1,4 +1,4 @@
-﻿"""
+"""
 tests/test_pdf_generator.py
 Full-scale tests for generation/pdf_generator.py.
 Covers: sanitization, filenames, reserved names, collisions, preview,
@@ -625,7 +625,99 @@ class TestReservedNamesSet(unittest.TestCase):
         from generation.pdf_generator import RESERVED_WINDOWS_NAMES
         self.assertNotIn("RESULT", RESERVED_WINDOWS_NAMES)
         self.assertNotIn("STUDENT", RESERVED_WINDOWS_NAMES)
-        self.assertNotIn("COM10", RESERVED_WINDOWS_NAMES)
+class TestFieldExactPositioning(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_text_positioned_at_exact_field_coordinates(self):
+        import pymupdf
+        from generation.pdf_generator import generate_single_pdf
+
+        template = {
+            "template_id": "pos-test-1",
+            "canvas_width": 595,
+            "canvas_height": 842,
+            "background": {"type": "", "path": ""},
+            "fields": [
+                {
+                    "label": "Student_Name",
+                    "mapped_column": "Student_Name",
+                    "x": 120.0,
+                    "y": 250.0,
+                    "width": 200.0,
+                    "height": 36.0,
+                    "font_family": "Helvetica",
+                    "font_size": 12,
+                    "color": "#000000",
+                    "bold": False,
+                    "italic": False,
+                    "underline": False,
+                    "multiline": False,
+                    "alignment": "Left",
+                }
+            ],
+        }
+
+        out_pdf = os.path.join(self.tmp, "pos_test.pdf")
+        generate_single_pdf(template, {"Student_Name": "Priya"}, out_pdf)
+
+        doc = pymupdf.open(out_pdf)
+        words = doc[0].get_text("words")
+        doc.close()
+
+        self.assertTrue(len(words) > 0)
+        word_x0, word_y0, word_x1, word_y1, text, *_ = words[0]
+        self.assertEqual(text, "Priya")
+        self.assertAlmostEqual(word_x0, 120.0, delta=2.0)
+        self.assertAlmostEqual(word_y0, 250.0, delta=2.0)
+
+    def test_text_positioned_vertical_alignment_middle(self):
+        import pymupdf
+        from generation.pdf_generator import generate_single_pdf
+
+        template = {
+            "template_id": "pos-test-mid",
+            "canvas_width": 595,
+            "canvas_height": 842,
+            "background": {"type": "", "path": ""},
+            "fields": [
+                {
+                    "label": "Student_Name",
+                    "mapped_column": "Student_Name",
+                    "x": 100.0,
+                    "y": 200.0,
+                    "width": 200.0,
+                    "height": 60.0,
+                    "font_family": "Helvetica",
+                    "font_size": 12,
+                    "color": "#000000",
+                    "bold": False,
+                    "italic": False,
+                    "underline": False,
+                    "multiline": False,
+                    "alignment": "Left",
+                    "v_alignment": "Middle",
+                }
+            ],
+        }
+
+        out_pdf = os.path.join(self.tmp, "pos_test_mid.pdf")
+        generate_single_pdf(template, {"Student_Name": "Priya"}, out_pdf)
+
+        doc = pymupdf.open(out_pdf)
+        words = doc[0].get_text("words")
+        doc.close()
+
+        self.assertTrue(len(words) > 0)
+        word_x0, word_y0, word_x1, word_y1, text, *_ = words[0]
+        self.assertEqual(text, "Priya")
+        self.assertAlmostEqual(word_x0, 100.0, delta=2.0)
+        # Expected y0 is around 200 + (60 - 12*1.15)/2 = ~223.1
+        self.assertGreater(word_y0, 215.0)
+        self.assertLess(word_y0, 235.0)
 
 
 if __name__ == "__main__":

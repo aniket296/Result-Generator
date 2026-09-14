@@ -60,6 +60,7 @@ class PropertiesPanel(QWidget):
     underline_changed   = pyqtSignal(bool)
     multiline_changed   = pyqtSignal(bool)
     alignment_changed   = pyqtSignal(str)
+    v_alignment_changed = pyqtSignal(str)
 
     # ── Signals (shared geometry) ─────────────────────────────────────────────
     x_changed        = pyqtSignal(float)
@@ -214,6 +215,7 @@ class PropertiesPanel(QWidget):
                 self._underline_cb.setChecked(item.underline)
                 self._multiline_cb.setChecked(item.multiline)
                 self._set_align_active(item.alignment)
+                self._set_v_align_active(getattr(item, "v_alignment", "Top"))
         finally:
             self._updating = False
 
@@ -422,20 +424,36 @@ class PropertiesPanel(QWidget):
         )
         layout.addWidget(self._multiline_cb)
 
-        # Alignment buttons
+        # Alignment buttons (Horizontal & Vertical)
         row3 = QHBoxLayout()
         row3.setSpacing(4)
-        row3.addWidget(self._caption("Align:"))
+        row3.addWidget(self._caption("H:"))
         self._align_btns: dict[str, QPushButton] = {}
         for key, sym in [("Left", "L"), ("Center", "C"), ("Right", "R")]:
             btn = QPushButton(sym)
             btn.setCheckable(True)
-            btn.setFixedSize(30, 26)
+            btn.setFixedSize(26, 26)
+            btn.setToolTip(f"Horizontal Align {key}")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setStyleSheet(self._TOGGLE_OFF)
             btn.clicked.connect(lambda _c, k=key: self._on_align(k))
             self._align_btns[key] = btn
             row3.addWidget(btn)
+
+        row3.addSpacing(6)
+        row3.addWidget(self._caption("V:"))
+        self._v_align_btns: dict[str, QPushButton] = {}
+        for key, sym in [("Top", "T"), ("Middle", "M"), ("Bottom", "B")]:
+            btn = QPushButton(sym)
+            btn.setCheckable(True)
+            btn.setFixedSize(26, 26)
+            btn.setToolTip(f"Vertical Align {key}")
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(self._TOGGLE_OFF)
+            btn.clicked.connect(lambda _c, k=key: self._on_v_align(k))
+            self._v_align_btns[key] = btn
+            row3.addWidget(btn)
+
         row3.addStretch()
         layout.addLayout(row3)
 
@@ -674,6 +692,19 @@ class PropertiesPanel(QWidget):
 
     def _set_align_active(self, active_key: str) -> None:
         for k, btn in self._align_btns.items():
+            btn.blockSignals(True)
+            btn.setChecked(k == active_key)
+            btn.blockSignals(False)
+            btn.setStyleSheet(self._TOGGLE_ON if btn.isChecked() else self._TOGGLE_OFF)
+
+    def _on_v_align(self, key: str) -> None:
+        self._set_v_align_active(key)
+        self._live(lambda: self.v_alignment_changed.emit(key))
+
+    def _set_v_align_active(self, active_key: str) -> None:
+        if not hasattr(self, "_v_align_btns"):
+            return
+        for k, btn in self._v_align_btns.items():
             btn.blockSignals(True)
             btn.setChecked(k == active_key)
             btn.blockSignals(False)

@@ -234,6 +234,9 @@ class TemplateEditorView(QWidget):
         p.alignment_changed.connect(
             lambda a: self._apply_to_field(lambda i: i.set_alignment(a))
         )
+        p.v_alignment_changed.connect(
+            lambda va: self._apply_to_field(lambda i: i.set_v_alignment(va))
+        )
 
         # ── Geometry (shared by FieldItem, ChartItem, BadgeItem) ───────
         p.x_changed.connect(self._on_panel_x)

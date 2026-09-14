@@ -1,4 +1,4 @@
-﻿"""
+"""
 FieldItem - draggable, resizable text placeholder on the template canvas.
 
 Supports:
@@ -50,7 +50,8 @@ class FieldItem(QGraphicsObject):
         self.italic: bool = False
         self.underline: bool = False
         self.multiline: bool = False
-        self.alignment: str = "Left"   # "Left" | "Center" | "Right"
+        self.alignment: str = "Left"     # "Left" | "Center" | "Right"
+        self.v_alignment: str = "Top"    # "Top" | "Middle" | "Bottom"
 
         # Geometry (local coordinates)
         self._width: float = max(60.0, width)
@@ -92,20 +93,26 @@ class FieldItem(QGraphicsObject):
         painter.setFont(font)
         painter.setPen(QColor(self.color))
 
-        align_flags = {
+        align_h_flags = {
             "Left"  : Qt.AlignmentFlag.AlignLeft,
             "Center": Qt.AlignmentFlag.AlignHCenter,
             "Right" : Qt.AlignmentFlag.AlignRight,
         }.get(self.alignment, Qt.AlignmentFlag.AlignLeft)
+
+        align_v_flags = {
+            "Top"   : Qt.AlignmentFlag.AlignTop,
+            "Middle": Qt.AlignmentFlag.AlignVCenter,
+            "Bottom": Qt.AlignmentFlag.AlignBottom,
+        }.get(self.v_alignment, Qt.AlignmentFlag.AlignTop)
 
         prefix = "[★ Unique] " if self.is_unique else ""
         col_name = self.mapped_column or self.label
         display = f"{prefix}{{{{{col_name}}}}}"
 
         if self.multiline:
-            flags = align_flags | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap
+            flags = align_h_flags | align_v_flags | Qt.TextFlag.TextWordWrap
         else:
-            flags = align_flags | Qt.AlignmentFlag.AlignVCenter
+            flags = align_h_flags | align_v_flags
 
         painter.drawText(rect, flags, display)
 
@@ -230,6 +237,11 @@ class FieldItem(QGraphicsObject):
             self.alignment = align
             self.update()
 
+    def set_v_alignment(self, v_align: str) -> None:
+        if v_align in ("Top", "Middle", "Bottom"):
+            self.v_alignment = v_align
+            self.update()
+
     def set_field_size(self, w: float, h: float) -> None:
         self.prepareGeometryChange()
         self._width  = max(60.0, float(w))
@@ -266,6 +278,7 @@ class FieldItem(QGraphicsObject):
             "underline"    : self.underline,
             "multiline"    : self.multiline,
             "alignment"    : self.alignment,
+            "v_alignment"  : self.v_alignment,
         }
 
     @classmethod
@@ -287,6 +300,7 @@ class FieldItem(QGraphicsObject):
         item.underline     = d.get("underline",      False)
         item.multiline     = d.get("multiline",      False)
         item.alignment     = d.get("alignment",      "Left")
+        item.v_alignment   = d.get("v_alignment",    "Top")
         return item
 
     def _on_handle(self, pos: QPointF) -> bool:

@@ -1,4 +1,4 @@
-﻿"""
+"""
 tests/test_field_item.py
 Full-scale tests for ui/widgets/field_item.py
 """
@@ -152,6 +152,26 @@ class TestFieldItemSetters(unittest.TestCase):
         item.set_alignment("Justify")
         self.assertEqual(item.alignment, "Left")  # default unchanged
 
+    def test_set_v_alignment_top(self):
+        item = self._make()
+        item.set_v_alignment("Top")
+        self.assertEqual(item.v_alignment, "Top")
+
+    def test_set_v_alignment_middle(self):
+        item = self._make()
+        item.set_v_alignment("Middle")
+        self.assertEqual(item.v_alignment, "Middle")
+
+    def test_set_v_alignment_bottom(self):
+        item = self._make()
+        item.set_v_alignment("Bottom")
+        self.assertEqual(item.v_alignment, "Bottom")
+
+    def test_set_v_alignment_invalid_no_change(self):
+        item = self._make()
+        item.set_v_alignment("Invalid")
+        self.assertEqual(item.v_alignment, "Top")
+
     def test_set_field_size(self):
         item = self._make()
         item.set_field_size(300.0, 50.0)
@@ -181,6 +201,7 @@ class TestFieldItemSerialization(unittest.TestCase):
         item.set_multiline(True)
         item.set_color("#2563eb")
         item.set_alignment("Center")
+        item.set_v_alignment("Middle")
         item.set_font_family("Arial")
         item.set_font_size(14)
         return item
@@ -190,7 +211,7 @@ class TestFieldItemSerialization(unittest.TestCase):
         d = item.to_dict()
         keys = ["label", "mapped_column", "is_unique", "x", "y", "width", "height",
                 "font_family", "font_size", "color", "bold", "italic", "underline",
-                "multiline", "alignment"]
+                "multiline", "alignment", "v_alignment"]
         for key in keys:
             self.assertIn(key, d)
 
@@ -206,6 +227,7 @@ class TestFieldItemSerialization(unittest.TestCase):
         self.assertTrue(d["multiline"])
         self.assertEqual(d["color"], "#2563eb")
         self.assertEqual(d["alignment"], "Center")
+        self.assertEqual(d["v_alignment"], "Middle")
         self.assertEqual(d["font_family"], "Arial")
         self.assertEqual(d["font_size"], 14)
 
@@ -223,6 +245,7 @@ class TestFieldItemSerialization(unittest.TestCase):
         self.assertEqual(restored.multiline, item.multiline)
         self.assertEqual(restored.color, item.color)
         self.assertEqual(restored.alignment, item.alignment)
+        self.assertEqual(restored.v_alignment, item.v_alignment)
         self.assertEqual(restored.font_family, item.font_family)
         self.assertEqual(restored.font_size, item.font_size)
 
@@ -235,6 +258,7 @@ class TestFieldItemSerialization(unittest.TestCase):
         self.assertFalse(restored.underline)
         self.assertEqual(restored.color, "#000000")
         self.assertEqual(restored.alignment, "Left")
+        self.assertEqual(restored.v_alignment, "Top")
 
     def test_to_dict_coordinates_rounded(self):
         from ui.widgets.field_item import FieldItem
@@ -250,7 +274,7 @@ class TestFieldItemSerialization(unittest.TestCase):
         d2 = restored.to_dict()
         # All comparable non-position fields should match
         for k in ["label", "mapped_column", "is_unique", "bold", "italic",
-                   "underline", "multiline", "color", "alignment", "font_family", "font_size"]:
+                   "underline", "multiline", "color", "alignment", "v_alignment", "font_family", "font_size"]:
             self.assertEqual(d1[k], d2[k], f"Key '{k}' differs: {d1[k]} vs {d2[k]}")
 
 
