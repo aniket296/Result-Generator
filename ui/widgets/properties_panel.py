@@ -432,8 +432,8 @@ class PropertiesPanel(QWidget):
         for key, sym in [("Left", "L"), ("Center", "C"), ("Right", "R")]:
             btn = QPushButton(sym)
             btn.setCheckable(True)
-            btn.setFixedSize(26, 26)
-            btn.setToolTip(f"Horizontal Align {key}")
+            btn.setFixedSize(28, 26)
+            btn.setToolTip(f"Horizontal Align: {key}")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setStyleSheet(self._TOGGLE_OFF)
             btn.clicked.connect(lambda _c, k=key: self._on_align(k))
@@ -446,8 +446,8 @@ class PropertiesPanel(QWidget):
         for key, sym in [("Top", "T"), ("Middle", "M"), ("Bottom", "B")]:
             btn = QPushButton(sym)
             btn.setCheckable(True)
-            btn.setFixedSize(26, 26)
-            btn.setToolTip(f"Vertical Align {key}")
+            btn.setFixedSize(28, 26)
+            btn.setToolTip(f"Vertical Align: {key}")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setStyleSheet(self._TOGGLE_OFF)
             btn.clicked.connect(lambda _c, k=key: self._on_v_align(k))
@@ -759,17 +759,38 @@ class PropertiesPanel(QWidget):
 
     _TOGGLE_OFF = """
         QPushButton {
-            background: white; color: #374151;
-            border: 1px solid #d1d5db; border-radius: 4px;
-            font-size: 12px; font-weight: 600;
+            background: #ffffff;
+            color: #111827;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 700;
+            padding: 0px;
+            margin: 0px;
+            min-width: 0px;
+            min-height: 0px;
         }
-        QPushButton:hover { background: #f3f4f6; }
+        QPushButton:hover {
+            background: #f3f4f6;
+            color: #111827;
+        }
     """
 
     _TOGGLE_ON = """
         QPushButton {
-            background: #4f7ef8; color: white;
-            border: 1px solid #4f7ef8; border-radius: 4px;
-            font-size: 12px; font-weight: 700;
+            background: #2563eb;
+            color: #ffffff;
+            border: 1px solid #1d4ed8;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 700;
+            padding: 0px;
+            margin: 0px;
+            min-width: 0px;
+            min-height: 0px;
+        }
+        QPushButton:hover {
+            background: #1d4ed8;
+            color: #ffffff;
         }
     """
