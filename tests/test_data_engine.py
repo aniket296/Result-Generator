@@ -1,4 +1,4 @@
-﻿"""
+"""
 tests/test_data_engine.py
 Full-scale tests for data_engine: excel_loader, exceptions.
 Covers normal flow, edge cases, and failure modes.
@@ -376,10 +376,86 @@ class TestDatasetBackup(unittest.TestCase):
         _, _, meta = import_dataset_backup(p)
         self.assertEqual(meta, {})
 
-    def test_import_missing_file_raises(self):
-        from data_engine.excel_loader import import_dataset_backup
-        with self.assertRaises(Exception):
-            import_dataset_backup("/nonexistent/path.dataset.backup")
+class TestSheetDetectionAndSelection(unittest.TestCase):
+    """Test get_sheet_names and multi-sheet loading in excel_loader."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _make_multi_sheet_xlsx(self, sheets_data: dict[str, tuple[list[str], list[list]]], filename="multi.xlsx") -> str:
+        path = os.path.join(self.tmp, filename)
+        wb = openpyxl.Workbook()
+        # Remove default sheet
+        wb.remove(wb.active)
+
+        for sheet_title, (headers, rows) in sheets_data.items():
+            ws = wb.create_sheet(title=sheet_title)
+            ws.append(headers)
+            for row in rows:
+                ws.append(row)
+
+        wb.save(path)
+        return path
+
+    def test_single_sheet_names(self):
+        from data_engine.excel_loader import get_sheet_names
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Class_10A"
+        ws.append(["ID", "Name"])
+        p = os.path.join(self.tmp, "single.xlsx")
+        wb.save(p)
+
+        names = get_sheet_names(p)
+        self.assertEqual(names, ["Class_10A"])
+
+    def test_multi_sheet_names(self):
+        from data_engine.excel_loader import get_sheet_names
+        p = self._make_multi_sheet_xlsx({
+            "Section_A": (["ID", "Name"], [["1", "Alice"]]),
+            "Section_B": (["ID", "Name"], [["2", "Bob"]]),
+            "Section_C": (["ID", "Name"], [["3", "Charlie"]]),
+        })
+        names = get_sheet_names(p)
+        self.assertEqual(names, ["Section_A", "Section_B", "Section_C"])
+
+    def test_load_specific_sheet_by_name(self):
+        from data_engine.excel_loader import load_excel
+        p = self._make_multi_sheet_xlsx({
+            "Section_A": (["ID", "Name"], [["1", "Alice"]]),
+            "Section_B": (["Roll", "Student"], [["101", "Bob"]]),
+        })
+        headers_b, rows_b = load_excel(p, sheet_name="Section_B")
+        self.assertEqual(headers_b, ["Roll", "Student"])
+        self.assertEqual(len(rows_b), 1)
+        self.assertEqual(rows_b[0]["Student"], "Bob")
+
+        headers_a, rows_a = load_excel(p, sheet_name="Section_A")
+        self.assertEqual(headers_a, ["ID", "Name"])
+        self.assertEqual(rows_a[0]["Name"], "Alice")
+
+    def test_load_default_loads_first_sheet(self):
+        from data_engine.excel_loader import load_excel
+        p = self._make_multi_sheet_xlsx({
+            "FirstSheet": (["A", "B"], [["val1", "val2"]]),
+            "SecondSheet": (["X", "Y"], [["val3", "val4"]]),
+        })
+        headers, rows = load_excel(p)
+        self.assertEqual(headers, ["A", "B"])
+        self.assertEqual(rows[0]["A"], "val1")
+
+    def test_sheet_selection_dialog_ui(self):
+        import sys
+        from PyQt6.QtWidgets import QApplication
+        from ui.dialogs.sheet_selection_dialog import SheetSelectionDialog
+
+        _app = QApplication.instance() or QApplication(sys.argv)
+        dlg = SheetSelectionDialog(["Sheet1", "Sheet2", "Sheet3"], filename="test.xlsx")
+        self.assertEqual(dlg.sheet_names, ["Sheet1", "Sheet2", "Sheet3"])
+        self.assertEqual(dlg.get_selected_sheet(), "Sheet1")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-﻿"""
+"""
 data_engine/excel_loader.py
 Loads, validates, exports, and backs up Excel datasets.
 
@@ -52,9 +52,32 @@ def _check_file_locked(file_path: str) -> None:
         ) from exc
 
 
-def load_excel(file_path: str) -> tuple[list[str], list[dict[str, str]]]:
+def get_sheet_names(file_path: str) -> list[str]:
     """
-    Load an Excel (.xlsx / .xls) file.
+    Return list of worksheet names from an Excel workbook (.xlsx) using openpyxl.
+    """
+    _check_file_locked(file_path)
+    try:
+        wb = openpyxl.load_workbook(file_path, read_only=True, keep_links=False)
+        names = list(wb.sheetnames)
+        wb.close()
+        return names
+    except Exception as exc:
+        if isinstance(exc, FileLockedError):
+            raise
+        raise IOError(f"Failed to inspect Excel workbook sheets: {exc}") from exc
+
+
+def load_excel(
+    file_path: str,
+    sheet_name: str | int | None = None,
+) -> tuple[list[str], list[dict[str, str]]]:
+    """
+    Load an Excel (.xlsx / .xls) file or a specific worksheet from it.
+
+    Args:
+        file_path: Path to the Excel workbook.
+        sheet_name: Specific sheet name or index. If None, loads the first worksheet (index 0).
 
     Returns:
         tuple[list[str], list[dict[str, str]]]:
@@ -63,8 +86,10 @@ def load_excel(file_path: str) -> tuple[list[str], list[dict[str, str]]]:
     _check_file_locked(file_path)
 
     try:
+        target_sheet = sheet_name if sheet_name is not None else 0
         df = pd.read_excel(
             file_path,
+            sheet_name=target_sheet,
             dtype=str,
             keep_default_na=False,
             engine="openpyxl",

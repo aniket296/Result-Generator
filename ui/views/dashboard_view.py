@@ -25,12 +25,14 @@ from PyQt6.QtWidgets import (
 
 from data_engine.excel_loader import (
     export_dataset_backup,
+    get_sheet_names,
     import_dataset_backup,
     load_excel,
     validate_all_rows,
     validate_unique_column,
 )
 from data_engine.exceptions import DuplicateUniqueValueError, FileLockedError
+from ui.dialogs.sheet_selection_dialog import SheetSelectionDialog
 
 
 class DashboardView(QWidget):
@@ -378,11 +380,27 @@ class DashboardView(QWidget):
 
         while True:
             try:
-                headers, rows = load_excel(path)
+                sheet_names = get_sheet_names(path)
+                selected_sheet: str | None = None
+
+                if len(sheet_names) > 1:
+                    dlg = SheetSelectionDialog(sheet_names, filename=os.path.basename(path), parent=self)
+                    if dlg.exec() != dlg.DialogCode.Accepted:
+                        return
+                    selected_sheet = dlg.get_selected_sheet()
+                elif len(sheet_names) == 1:
+                    selected_sheet = sheet_names[0]
+
+                headers, rows = load_excel(path, sheet_name=selected_sheet)
                 self._source_file_path = path
                 self._headers = headers
                 self._rows = rows
-                self._apply_dataset(os.path.basename(path), headers, rows)
+
+                display_name = os.path.basename(path)
+                if selected_sheet and len(sheet_names) > 1:
+                    display_name = f"{display_name} ({selected_sheet})"
+
+                self._apply_dataset(display_name, headers, rows)
                 break
             except FileLockedError as exc:
                 reply = QMessageBox.warning(
