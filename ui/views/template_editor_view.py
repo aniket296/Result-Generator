@@ -166,6 +166,23 @@ class TemplateEditorView(QWidget):
         self._update_snap_btn_style()
         self._snap_btn.toggled.connect(self._on_toggle_snap)
 
+        # Multi-Item Alignment Buttons
+        self._align_left_btn   = self._tool_btn("⇤  Left",      self._on_align_left)
+        self._align_left_btn.setToolTip("Align selected items to the leftmost X coordinate (select 2+ items)")
+        self._align_left_btn.setEnabled(False)
+
+        self._align_center_btn = self._tool_btn("⇥⇤  Center",  self._on_align_center)
+        self._align_center_btn.setToolTip("Align selected items to the horizontal midpoint (select 2+ items)")
+        self._align_center_btn.setEnabled(False)
+
+        self._align_right_btn  = self._tool_btn("⇥  Right",     self._on_align_right)
+        self._align_right_btn.setToolTip("Align selected items to the rightmost edge (select 2+ items)")
+        self._align_right_btn.setEnabled(False)
+
+        self._distribute_v_btn = self._tool_btn("↕  Distribute", self._on_distribute_vertically)
+        self._distribute_v_btn.setToolTip("Evenly distribute vertical spacing between 3+ selected items")
+        self._distribute_v_btn.setEnabled(False)
+
         self._export_excel_btn = self._tool_btn("📊  Export Excel Template",  self._on_export_excel)
         self._save_btn        = self._tool_btn("💾  Save Template",           self._on_save_template)
         self._load_btn        = self._tool_btn("📂  Open Template",           self._on_load_template)
@@ -193,6 +210,10 @@ class TemplateEditorView(QWidget):
         row.addWidget(self._add_chart_btn)
         row.addWidget(self._add_badge_btn)
         row.addWidget(self._snap_btn)
+        row.addWidget(self._align_left_btn)
+        row.addWidget(self._align_center_btn)
+        row.addWidget(self._align_right_btn)
+        row.addWidget(self._distribute_v_btn)
         row.addWidget(self._export_excel_btn)
         row.addWidget(self._save_btn)
         row.addWidget(self._load_btn)
@@ -669,10 +690,93 @@ class TemplateEditorView(QWidget):
         self._has_unsaved_changes = True
 
     def _on_selection_changed(self) -> None:
-        sel   = self._scene.selectedItems()
-        items = [i for i in sel if isinstance(i, (FieldItem, ChartItem, BadgeItem))]
+        items = self._selected_canvas_items()
         self._selected_item = items[0] if items else None
         self._panel.load_item(self._selected_item)
+
+        count = len(items)
+        if hasattr(self, "_align_left_btn"):
+            self._align_left_btn.setEnabled(count >= 2)
+            self._align_center_btn.setEnabled(count >= 2)
+            self._align_right_btn.setEnabled(count >= 2)
+            self._distribute_v_btn.setEnabled(count >= 3)
+
+    def _selected_canvas_items(self) -> list[FieldItem | ChartItem | BadgeItem]:
+        sel = self._scene.selectedItems()
+        return [i for i in sel if isinstance(i, (FieldItem, ChartItem, BadgeItem))]
+
+    # ── Alignment Actions ─────────────────────────────────────────────────────
+
+    def _on_align_left(self) -> None:
+        items = self._selected_canvas_items()
+        if len(items) < 2:
+            return
+        min_x = min(it.pos().x() for it in items)
+        if self._snap_to_grid:
+            min_x = round(min_x / 10.0) * 10.0
+        for it in items:
+            it.setX(min_x)
+            self._on_item_moved(it, it.pos().x(), it.pos().y())
+        self._mark_dirty()
+
+    def _on_align_center(self) -> None:
+        items = self._selected_canvas_items()
+        if len(items) < 2:
+            return
+        min_left = min(it.pos().x() for it in items)
+        max_right = max(it.pos().x() + it.width for it in items)
+        mid_x = (min_left + max_right) / 2.0
+        for it in items:
+            target_x = mid_x - (it.width / 2.0)
+            if self._snap_to_grid:
+                target_x = round(target_x / 10.0) * 10.0
+            it.setX(target_x)
+            self._on_item_moved(it, it.pos().x(), it.pos().y())
+        self._mark_dirty()
+
+    def _on_align_right(self) -> None:
+        items = self._selected_canvas_items()
+        if len(items) < 2:
+            return
+        max_right = max(it.pos().x() + it.width for it in items)
+        for it in items:
+            target_x = max_right - it.width
+            if self._snap_to_grid:
+                target_x = round(target_x / 10.0) * 10.0
+            it.setX(target_x)
+            self._on_item_moved(it, it.pos().x(), it.pos().y())
+        self._mark_dirty()
+
+    def _on_distribute_vertically(self) -> None:
+        items = self._selected_canvas_items()
+        if len(items) < 3:
+            return
+        sorted_items = sorted(items, key=lambda it: it.pos().y())
+        total_items_height = sum(it.height for it in sorted_items)
+        top_y = sorted_items[0].pos().y()
+        bottom_edge = sorted_items[-1].pos().y() + sorted_items[-1].height
+        total_span = bottom_edge - top_y
+        total_gap = total_span - total_items_height
+
+        if total_gap > 0:
+            gap = total_gap / (len(sorted_items) - 1)
+            curr_y = top_y
+            for it in sorted_items:
+                target_y = curr_y
+                if self._snap_to_grid:
+                    target_y = round(target_y / 10.0) * 10.0
+                it.setY(target_y)
+                self._on_item_moved(it, it.pos().x(), it.pos().y())
+                curr_y += it.height + gap
+        else:
+            step = (sorted_items[-1].pos().y() - top_y) / (len(sorted_items) - 1)
+            for idx, it in enumerate(sorted_items):
+                target_y = top_y + idx * step
+                if self._snap_to_grid:
+                    target_y = round(target_y / 10.0) * 10.0
+                it.setY(target_y)
+                self._on_item_moved(it, it.pos().x(), it.pos().y())
+        self._mark_dirty()
 
     def _on_item_moved(self, item: FieldItem | ChartItem | BadgeItem, x: float, y: float) -> None:
         if item is self._selected_item:
@@ -733,6 +837,7 @@ class TemplateEditorView(QWidget):
                 border-radius: 4px; padding: 6px 12px; font-size: 12px; font-weight: 600;
             }
             QPushButton:hover { background: #f3f4f6; color: #111827; }
+            QPushButton:disabled { background: #f9fafb; color: #9ca3af; border-color: #e5e7eb; }
         """)
         btn.clicked.connect(slot)
         return btn

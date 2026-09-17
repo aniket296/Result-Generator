@@ -330,5 +330,109 @@ class TestSnapToGridAndBounding(unittest.TestCase):
         self.assertEqual(res_over.y(), 550.0)
 
 
+class TestMultiItemAlignment(unittest.TestCase):
+    def setUp(self):
+        from ui.views.template_editor_view import TemplateEditorView
+        self.editor = TemplateEditorView()
+        self.editor._snap_to_grid = False  # test exact coordinates
+
+    def test_align_left(self):
+        from ui.widgets.field_item import FieldItem
+        f1 = FieldItem(label="F1", x=150.0, y=100.0, width=100, height=40)
+        f2 = FieldItem(label="F2", x=80.0,  y=160.0, width=120, height=40)
+        f3 = FieldItem(label="F3", x=220.0, y=220.0, width=100, height=40)
+        for f in [f1, f2, f3]:
+            self.editor._scene.addItem(f)
+            self.editor._field_items.append(f)
+            f.setSelected(True)
+
+        self.editor._on_align_left()
+        self.assertEqual(f1.pos().x(), 80.0)
+        self.assertEqual(f2.pos().x(), 80.0)
+        self.assertEqual(f3.pos().x(), 80.0)
+
+    def test_align_center(self):
+        from ui.widgets.field_item import FieldItem
+        f1 = FieldItem(label="F1", x=100.0, y=100.0, width=200, height=40)  # span [100, 300]
+        f2 = FieldItem(label="F2", x=200.0, y=200.0, width=100, height=40)  # span [200, 300]
+        for f in [f1, f2]:
+            self.editor._scene.addItem(f)
+            self.editor._field_items.append(f)
+            f.setSelected(True)
+
+        # Midpoint of combined [100, 300] is 200.0
+        # F1 target x: 200 - 100 = 100
+        # F2 target x: 200 - 50 = 150
+        self.editor._on_align_center()
+        self.assertEqual(f1.pos().x(), 100.0)
+        self.assertEqual(f2.pos().x(), 150.0)
+
+    def test_align_right(self):
+        from ui.widgets.field_item import FieldItem
+        f1 = FieldItem(label="F1", x=50.0,  y=100.0, width=100, height=40)  # right edge = 150
+        f2 = FieldItem(label="F2", x=150.0, y=160.0, width=150, height=40)  # right edge = 300
+        for f in [f1, f2]:
+            self.editor._scene.addItem(f)
+            self.editor._field_items.append(f)
+            f.setSelected(True)
+
+        self.editor._on_align_right()
+        # Max right is 300.0
+        # F1 target x: 300 - 100 = 200.0
+        # F2 target x: 300 - 150 = 150.0
+        self.assertEqual(f1.pos().x(), 200.0)
+        self.assertEqual(f2.pos().x(), 150.0)
+
+    def test_distribute_vertically(self):
+        from ui.widgets.field_item import FieldItem
+        f1 = FieldItem(label="F1", x=100.0, y=100.0, width=100, height=50)
+        f2 = FieldItem(label="F2", x=100.0, y=180.0, width=100, height=50)
+        f3 = FieldItem(label="F3", x=100.0, y=400.0, width=100, height=50)
+        for f in [f1, f2, f3]:
+            self.editor._scene.addItem(f)
+            self.editor._field_items.append(f)
+            f.setSelected(True)
+
+        # Top = 100, Bottom = 450 (span 350, total heights 150, total gap 200 -> gap = 100 each)
+        # f1: 100
+        # f2: 100 + 50 + 100 = 250
+        # f3: 250 + 50 + 100 = 400
+        self.editor._on_distribute_vertically()
+        self.assertEqual(f1.pos().y(), 100.0)
+        self.assertEqual(f2.pos().y(), 250.0)
+        self.assertEqual(f3.pos().y(), 400.0)
+
+    def test_alignment_toolbar_button_states(self):
+        from ui.widgets.field_item import FieldItem
+        f1 = FieldItem(label="F1")
+        f2 = FieldItem(label="F2")
+        f3 = FieldItem(label="F3")
+        for f in [f1, f2, f3]:
+            self.editor._scene.addItem(f)
+            self.editor._field_items.append(f)
+
+        # 0 items selected
+        self.editor._scene.clearSelection()
+        self.assertFalse(self.editor._align_left_btn.isEnabled())
+        self.assertFalse(self.editor._distribute_v_btn.isEnabled())
+
+        # 1 item selected
+        f1.setSelected(True)
+        self.assertFalse(self.editor._align_left_btn.isEnabled())
+        self.assertFalse(self.editor._distribute_v_btn.isEnabled())
+
+        # 2 items selected
+        f2.setSelected(True)
+        self.assertTrue(self.editor._align_left_btn.isEnabled())
+        self.assertTrue(self.editor._align_center_btn.isEnabled())
+        self.assertTrue(self.editor._align_right_btn.isEnabled())
+        self.assertFalse(self.editor._distribute_v_btn.isEnabled())
+
+        # 3 items selected
+        f3.setSelected(True)
+        self.assertTrue(self.editor._align_left_btn.isEnabled())
+        self.assertTrue(self.editor._distribute_v_btn.isEnabled())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
