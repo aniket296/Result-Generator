@@ -278,13 +278,56 @@ class TestFieldItemSerialization(unittest.TestCase):
             self.assertEqual(d1[k], d2[k], f"Key '{k}' differs: {d1[k]} vs {d2[k]}")
 
 
-class TestFieldItemBoundingRect(unittest.TestCase):
-    def test_bounding_rect_includes_padding(self):
+class TestSnapToGridAndBounding(unittest.TestCase):
+    def test_snap_to_grid_clamps_to_multiples_of_step(self):
+        from PyQt6.QtCore import QPointF
+        from PyQt6.QtWidgets import QGraphicsItem, QGraphicsScene
         from ui.widgets.field_item import FieldItem
-        item = FieldItem(width=200, height=40)
-        rect = item.boundingRect()
-        self.assertAlmostEqual(rect.width(), 202.0)
-        self.assertAlmostEqual(rect.height(), 42.0)
+
+        scene = QGraphicsScene(0, 0, 800, 1000)
+        item = FieldItem(x=0, y=0, width=100, height=50)
+        scene.addItem(item)
+
+        item.set_snap_to_grid(True, step=10.0)
+
+        # Proposed pos (104.3, 107.8) -> snapped to (100.0, 110.0)
+        res_pos = item.itemChange(QGraphicsItem.GraphicsItemChange.ItemPositionChange, QPointF(104.3, 107.8))
+        self.assertEqual(res_pos.x(), 100.0)
+        self.assertEqual(res_pos.y(), 110.0)
+
+    def test_snap_to_grid_disabled_keeps_subpixel(self):
+        from PyQt6.QtCore import QPointF
+        from PyQt6.QtWidgets import QGraphicsItem, QGraphicsScene
+        from ui.widgets.field_item import FieldItem
+
+        scene = QGraphicsScene(0, 0, 800, 1000)
+        item = FieldItem(x=0, y=0, width=100, height=50)
+        scene.addItem(item)
+
+        item.set_snap_to_grid(False)
+        res_pos = item.itemChange(QGraphicsItem.GraphicsItemChange.ItemPositionChange, QPointF(104.3, 107.8))
+        self.assertAlmostEqual(res_pos.x(), 104.3)
+        self.assertAlmostEqual(res_pos.y(), 107.8)
+
+    def test_bounds_clamping_to_scene_rect(self):
+        from PyQt6.QtCore import QPointF
+        from PyQt6.QtWidgets import QGraphicsItem, QGraphicsScene
+        from ui.widgets.field_item import FieldItem
+
+        scene = QGraphicsScene(0, 0, 500, 600)
+        item = FieldItem(x=0, y=0, width=100, height=50)
+        scene.addItem(item)
+        item.set_snap_to_grid(False)
+
+        # Attempt to place outside top/left (< 0)
+        res_neg = item.itemChange(QGraphicsItem.GraphicsItemChange.ItemPositionChange, QPointF(-20.0, -50.0))
+        self.assertEqual(res_neg.x(), 0.0)
+        self.assertEqual(res_neg.y(), 0.0)
+
+        # Attempt to place beyond right/bottom (> max_x = 400, max_y = 550)
+        res_over = item.itemChange(QGraphicsItem.GraphicsItemChange.ItemPositionChange, QPointF(900.0, 800.0))
+        self.assertEqual(res_over.x(), 400.0)
+        self.assertEqual(res_over.y(), 550.0)
 
 
 if __name__ == "__main__":

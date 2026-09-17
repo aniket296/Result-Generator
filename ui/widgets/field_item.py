@@ -63,6 +63,10 @@ class FieldItem(QGraphicsObject):
         self._resize_start_w: float = self._width
         self._resize_start_h: float = self._height
 
+        # Snap to grid settings
+        self.snap_to_grid: bool = True
+        self.grid_size: float = 10.0
+
         self.setPos(x, y)
         self.setFlags(
             QGraphicsItem.GraphicsItemFlag.ItemIsMovable
@@ -182,8 +186,32 @@ class FieldItem(QGraphicsObject):
     # Item change (signals on position/selection change)
     # ------------------------------------------------------------------
 
+    def set_snap_to_grid(self, enabled: bool, step: float = 10.0) -> None:
+        """Configure magnetic snap-to-grid alignment and step size."""
+        self.snap_to_grid = enabled
+        self.grid_size = max(1.0, float(step))
+
     def itemChange(self, change, value):
-        if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
+            new_pos = value  # QPointF
+            x = new_pos.x()
+            y = new_pos.y()
+
+            if getattr(self, "snap_to_grid", False):
+                step = getattr(self, "grid_size", 10.0)
+                if step > 0:
+                    x = round(x / step) * step
+                    y = round(y / step) * step
+
+            if self.scene():
+                scene_rect = self.scene().sceneRect()
+                max_x = max(0.0, scene_rect.width() - self._width)
+                max_y = max(0.0, scene_rect.height() - self._height)
+                x = min(max(scene_rect.x(), x), scene_rect.x() + max_x)
+                y = min(max(scene_rect.y(), y), scene_rect.y() + max_y)
+
+            return QPointF(x, y)
+        elif change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
             p = self.pos()
             self.position_changed.emit(p.x(), p.y())
         return super().itemChange(change, value)

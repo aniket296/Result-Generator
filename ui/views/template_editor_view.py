@@ -89,6 +89,7 @@ class TemplateEditorView(QWidget):
         self._initial_fit_done: bool = False
         self._has_unsaved_changes: bool = False
         self._is_locked: bool = False
+        self._snap_to_grid: bool = True
 
         self._build_ui()
 
@@ -157,6 +158,14 @@ class TemplateEditorView(QWidget):
         self._add_btn         = self._tool_btn("➕  Add Field",               self._on_add_field)
         self._add_chart_btn   = self._tool_btn("📊  Add Chart",               self._on_add_chart)
         self._add_badge_btn   = self._tool_btn("🎖  Add Badge",               self._on_add_badge)
+        self._snap_btn        = QPushButton("🧲  Snap to Grid")
+        self._snap_btn.setCheckable(True)
+        self._snap_btn.setChecked(True)
+        self._snap_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._snap_btn.setToolTip("Toggle magnetic snap to 10px grid boundaries")
+        self._update_snap_btn_style()
+        self._snap_btn.toggled.connect(self._on_toggle_snap)
+
         self._export_excel_btn = self._tool_btn("📊  Export Excel Template",  self._on_export_excel)
         self._save_btn        = self._tool_btn("💾  Save Template",           self._on_save_template)
         self._load_btn        = self._tool_btn("📂  Open Template",           self._on_load_template)
@@ -183,6 +192,7 @@ class TemplateEditorView(QWidget):
         row.addWidget(self._add_btn)
         row.addWidget(self._add_chart_btn)
         row.addWidget(self._add_badge_btn)
+        row.addWidget(self._snap_btn)
         row.addWidget(self._export_excel_btn)
         row.addWidget(self._save_btn)
         row.addWidget(self._load_btn)
@@ -299,6 +309,34 @@ class TemplateEditorView(QWidget):
         """Return list of all field labels in canvas order (chart items excluded)."""
         return [f.label for f in self._field_items]
 
+    def _update_snap_btn_style(self) -> None:
+        if hasattr(self, "_snap_btn"):
+            if self._snap_btn.isChecked():
+                self._snap_btn.setStyleSheet("""
+                    QPushButton {
+                        background: #dbeafe; color: #1e40af; border: 1px solid #3b82f6;
+                        border-radius: 4px; padding: 6px 12px; font-size: 12px; font-weight: 600;
+                    }
+                    QPushButton:hover { background: #bfdbfe; }
+                """)
+            else:
+                self._snap_btn.setStyleSheet("""
+                    QPushButton {
+                        background: #f3f4f6; color: #6b7280; border: 1px solid #d1d5db;
+                        border-radius: 4px; padding: 6px 12px; font-size: 12px; font-weight: 600;
+                    }
+                    QPushButton:hover { background: #e5e7eb; color: #374151; }
+                """)
+
+    def _on_toggle_snap(self, checked: bool) -> None:
+        self._snap_to_grid = checked
+        self._update_snap_btn_style()
+        for item in self._all_canvas_items():
+            item.set_snap_to_grid(checked, 10.0)
+
+    def _all_canvas_items(self) -> list[FieldItem | ChartItem | BadgeItem]:
+        return list(self._field_items) + list(self._chart_items) + list(self._badge_items)
+
     # ── Actions ───────────────────────────────────────────────────────────────
 
     def _on_add_field(self) -> None:
@@ -316,8 +354,12 @@ class TemplateEditorView(QWidget):
         rect = self._scene.sceneRect()
         cx = rect.center().x() - 100
         cy = rect.center().y() - 18
+        if self._snap_to_grid:
+            cx = round(cx / 10.0) * 10.0
+            cy = round(cy / 10.0) * 10.0
 
         item = FieldItem(label=name, x=cx, y=cy, width=200, height=36)
+        item.set_snap_to_grid(self._snap_to_grid, 10.0)
         if self._excel_headers:
             matched = find_matching_header(name, self._excel_headers)
             if matched:
@@ -342,11 +384,15 @@ class TemplateEditorView(QWidget):
         rect = self._scene.sceneRect()
         cx = rect.center().x() - 150
         cy = rect.center().y() - 100
+        if self._snap_to_grid:
+            cx = round(cx / 10.0) * 10.0
+            cy = round(cy / 10.0) * 10.0
 
         item = ChartItem(
             label=f"Performance Chart {self._chart_counter}",
             x=cx, y=cy, width=300, height=200,
         )
+        item.set_snap_to_grid(self._snap_to_grid, 10.0)
         # Pre-select all numeric-looking columns if headers already loaded
         if self._excel_headers:
             item.chart_columns = list(self._excel_headers)
@@ -370,11 +416,15 @@ class TemplateEditorView(QWidget):
         rect = self._scene.sceneRect()
         cx = rect.center().x() - 50
         cy = rect.center().y() - 50
+        if self._snap_to_grid:
+            cx = round(cx / 10.0) * 10.0
+            cy = round(cy / 10.0) * 10.0
 
         item = BadgeItem(
             label=f"Badge {self._badge_counter}",
             x=cx, y=cy, width=100, height=100,
         )
+        item.set_snap_to_grid(self._snap_to_grid, 10.0)
         if self._excel_headers:
             item.rule_column = self._excel_headers[0]
 
@@ -582,6 +632,7 @@ class TemplateEditorView(QWidget):
         # Fields
         for fd in d.get("fields", []):
             item = FieldItem.from_dict(fd)
+            item.set_snap_to_grid(self._snap_to_grid, 10.0)
             item.position_changed.connect(lambda x, y, it=item: self._on_item_moved(it, x, y))
             item.geometry_changed.connect(lambda w, h, it=item: self._on_item_resized(it, w, h))
             self._scene.addItem(item)
@@ -590,6 +641,7 @@ class TemplateEditorView(QWidget):
         # Charts
         for cd in d.get("charts", []):
             item = ChartItem.from_dict(cd)
+            item.set_snap_to_grid(self._snap_to_grid, 10.0)
             item.position_changed.connect(lambda x, y, it=item: self._on_item_moved(it, x, y))
             item.geometry_changed.connect(lambda w, h, it=item: self._on_item_resized(it, w, h))
             self._scene.addItem(item)
@@ -598,6 +650,7 @@ class TemplateEditorView(QWidget):
         # Badges
         for bd in d.get("badges", []):
             item = BadgeItem.from_dict(bd)
+            item.set_snap_to_grid(self._snap_to_grid, 10.0)
             item.position_changed.connect(lambda x, y, it=item: self._on_item_moved(it, x, y))
             item.geometry_changed.connect(lambda w, h, it=item: self._on_item_resized(it, w, h))
             self._scene.addItem(item)
