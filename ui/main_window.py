@@ -19,8 +19,10 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from data_engine.preflight_sanitizer import audit_dataset, auto_sanitize_dataset
 from generation.pdf_generator import GeneratorWorker
 from generation.printer import print_all_student_records
+from ui.dialogs.audit_dialog import AuditPreCheckDialog
 from ui.dialogs.generation_dialog import (
     GenerationCompletedDialog,
     GenerationProgressDialog,
@@ -286,10 +288,42 @@ class MainWindow(QMainWindow):
         bundle_enabled = setup_dlg.bundle_enabled
         bundle_col = setup_dlg.bundle_column
 
-        # 2. Worker Thread & Live Dashboard
+        # 2. Pre-Flight Data Sanitizer & Audit Check
+        mapped_columns: list[str] = []
+        for f in template_state.get("fields", []):
+            col = f.get("mapped_column") or f.get("label", "")
+            if col and col not in mapped_columns:
+                mapped_columns.append(col)
+        for c in template_state.get("charts", []):
+            for col in c.get("chart_columns", []):
+                if col and col not in mapped_columns:
+                    mapped_columns.append(col)
+        for b in template_state.get("badges", []):
+            col = b.get("condition_column", "")
+            if col and col not in mapped_columns:
+                mapped_columns.append(col)
+        if n_col and n_col not in mapped_columns:
+            mapped_columns.append(n_col)
+
+        cleaned_rows, audit_report = audit_dataset(rows, mapped_columns, unique_col=u_col)
+        rows_to_generate = cleaned_rows
+
+        if audit_report.has_flaws:
+            audit_dlg = AuditPreCheckDialog(audit_report, self)
+            if audit_dlg.exec() != AuditPreCheckDialog.DialogCode.Accepted:
+                return  # Cancel generation
+
+            # Auto-sanitize dataset
+            rows_to_generate = auto_sanitize_dataset(
+                rows,
+                mapped_columns,
+                unique_col=u_col,
+            )
+
+        # 3. Worker Thread & Live Dashboard
         worker = GeneratorWorker(
             template_state=template_state,
-            rows=rows,
+            rows=rows_to_generate,
             output_dir=out_dir,
             unique_col=u_col,
             name_col=n_col,
@@ -298,7 +332,7 @@ class MainWindow(QMainWindow):
             bundle_col=bundle_col,
         )
 
-        prog_dlg = GenerationProgressDialog(worker, len(rows), self)
+        prog_dlg = GenerationProgressDialog(worker, len(rows_to_generate), self)
         worker.start()
 
         if prog_dlg.exec() == GenerationProgressDialog.DialogCode.Accepted:
