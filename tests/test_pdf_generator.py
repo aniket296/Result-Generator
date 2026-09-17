@@ -4,6 +4,7 @@ Full-scale tests for generation/pdf_generator.py.
 Covers: sanitization, filenames, reserved names, collisions, preview,
 pre-generation checks, PDF rendering, metadata, worker state machine.
 """
+import datetime
 import os
 import shutil
 import tempfile
@@ -851,5 +852,132 @@ class TestZipPackaging(unittest.TestCase):
             shutil.rmtree(tmp)
 
 
+class TestAuditReport(unittest.TestCase):
+    def test_write_generation_audit_report_clean(self):
+        from generation.pdf_generator import write_generation_audit_report
+        tmp = tempfile.mkdtemp()
+        try:
+            start = datetime.datetime(2026, 9, 18, 10, 0, 0)
+            end = datetime.datetime(2026, 9, 18, 10, 0, 5)
+            report_p = write_generation_audit_report(
+                output_dir=tmp,
+                template_name="Term 1 Report Card",
+                template_id="uuid-12345",
+                template_path="/path/to/template.bg.png",
+                dataset_name="Class_10_Students.xlsx",
+                total_processed=50,
+                succeeded_count=50,
+                skipped_count=0,
+                failed_count=0,
+                elapsed_seconds=5.25,
+                start_time=start,
+                end_time=end,
+                created_bundles=["/path/to/Print_Bundles/Class_10A_Master_Print.pdf"],
+                created_zip_path="/path/to/Class10_Results.zip",
+            )
+            self.assertTrue(os.path.exists(report_p))
+            self.assertTrue(report_p.endswith("generation_report.txt"))
+
+            with open(report_p, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            self.assertIn("BATCH RESULT GENERATION AUDIT REPORT", content)
+            self.assertIn("5.25 seconds", content)
+            self.assertIn("Term 1 Report Card", content)
+            self.assertIn("uuid-12345", content)
+            self.assertIn("Class_10_Students.xlsx", content)
+            self.assertIn("Total Records    : 50", content)
+            self.assertIn("PDFs Succeeded   : 50", content)
+            self.assertIn("Success Rate     : 100.0%", content)
+            self.assertIn("Class_10A_Master_Print.pdf", content)
+            self.assertIn("Class10_Results.zip", content)
+            self.assertIn("Zero skipped or failed records", content)
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_write_generation_audit_report_with_failures_and_skips(self):
+        from generation.pdf_generator import write_generation_audit_report
+        tmp = tempfile.mkdtemp()
+        try:
+            report_p = write_generation_audit_report(
+                output_dir=tmp,
+                template_name="Term 1 Report Card",
+                template_id="uuid-999",
+                template_path="/template.png",
+                dataset_name="Dataset.xlsx",
+                total_processed=10,
+                succeeded_count=7,
+                skipped_count=2,
+                failed_count=1,
+                failed_records=[
+                    {"row_index": 4, "student_name": "Charlie", "unique_val": "105", "error": "PyMuPDF render error"}
+                ],
+                skipped_records=[
+                    {"row_num": 2, "student_name": "Alice", "unique_val": "102", "reason": "Empty cell in 'Math'"},
+                    {"row_num": 3, "student_name": "Bob", "unique_val": "103", "reason": "Empty cell in 'Science'"},
+                ],
+                elapsed_seconds=2.40,
+            )
+            self.assertTrue(os.path.exists(report_p))
+            with open(report_p, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            self.assertIn("Total Records    : 10", content)
+            self.assertIn("PDFs Succeeded   : 7", content)
+            self.assertIn("Skipped Records  : 2", content)
+            self.assertIn("Failed Records   : 1", content)
+            self.assertIn("Success Rate     : 70.0%", content)
+            self.assertIn("[SKIPPED RECORDS]", content)
+            self.assertIn("Row 2 [102 - Alice]: Empty cell in 'Math'", content)
+            self.assertIn("Row 3 [103 - Bob]: Empty cell in 'Science'", content)
+            self.assertIn("[FAILED RECORDS]", content)
+            self.assertIn("Row 5 [105 - Charlie]: PyMuPDF render error", content)
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_generator_worker_generates_audit_report(self):
+        from generation.pdf_generator import GeneratorWorker
+        tmp = tempfile.mkdtemp()
+        try:
+            tmpl = {
+                "template_id": "rep-test-tmpl",
+                "template_name": "Sample Report Card",
+                "canvas_width": 400.0,
+                "canvas_height": 600.0,
+                "fields": [
+                    {"label": "Name", "mapped_column": "Name", "x": 10, "y": 10, "width": 100, "height": 30}
+                ]
+            }
+            rows = [
+                {"ID": "101", "Name": "Alice"},
+                {"ID": "102", "Name": "Bob"},
+            ]
+            worker = GeneratorWorker(
+                template_state=tmpl,
+                rows=rows,
+                output_dir=tmp,
+                unique_col="ID",
+                name_col="Name",
+                dataset_name="SampleStudents.xlsx",
+            )
+            worker.run()
+
+            report_file = os.path.join(tmp, "generation_report.txt")
+            self.assertTrue(os.path.exists(report_file))
+            self.assertTrue(os.path.exists(worker.report_path))
+            self.assertGreater(worker.elapsed_seconds, 0.0)
+
+            with open(report_file, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            self.assertIn("Sample Report Card", content)
+            self.assertIn("SampleStudents.xlsx", content)
+            self.assertIn("Total Records    : 2", content)
+            self.assertIn("PDFs Succeeded   : 2", content)
+        finally:
+            shutil.rmtree(tmp)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+

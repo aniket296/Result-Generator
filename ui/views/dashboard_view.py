@@ -560,6 +560,13 @@ class DashboardView(QWidget):
     def get_dataset(self) -> tuple[list[str], list[dict[str, str]]]:
         return self._headers, self._rows
 
+    def get_dataset_name(self) -> str:
+        if self._source_file_path:
+            return os.path.basename(self._source_file_path)
+        if hasattr(self, "_filename_label") and self._filename_label.text():
+            return self._filename_label.text().strip()
+        return "Student Dataset"
+
     @staticmethod
     def _make_divider() -> QFrame:
         div = QFrame()

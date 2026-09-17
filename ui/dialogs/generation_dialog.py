@@ -392,6 +392,9 @@ class GenerationProgressDialog(QDialog):
         self.failed_count = 0
         self.output_directory = ""
         self.created_bundles: list[str] = []
+        self.created_zip_path: str = ""
+        self.report_path: str = ""
+        self.elapsed_seconds: float = 0.0
         self.failed_records: list[dict[str, Any]] = []
 
         self.setWindowTitle("Generating Results...")
@@ -523,6 +526,8 @@ class GenerationProgressDialog(QDialog):
         self.failed_records = failed_records
         self.created_bundles = list(getattr(self.worker, "created_bundles", []))
         self.created_zip_path = str(getattr(self.worker, "created_zip_path", ""))
+        self.report_path = str(getattr(self.worker, "report_path", ""))
+        self.elapsed_seconds = float(getattr(self.worker, "elapsed_seconds", 0.0))
         self.accept()
 
 
@@ -531,7 +536,7 @@ class GenerationProgressDialog(QDialog):
 # ═════════════════════════════════════════════════════════════════════════════
 
 class GenerationCompletedDialog(QDialog):
-    """Post-generation summary screen with Open Folder, View Errors, and Skip Regeneration."""
+    """Post-generation summary screen with Open Folder, View Errors, Audit Report, and Skip Regeneration."""
 
     def __init__(
         self,
@@ -544,6 +549,8 @@ class GenerationCompletedDialog(QDialog):
         parent=None,
         created_bundles: list[str] | None = None,
         created_zip: str = "",
+        report_path: str = "",
+        elapsed_seconds: float = 0.0,
     ) -> None:
         super().__init__(parent)
         self.generated = generated
@@ -554,9 +561,11 @@ class GenerationCompletedDialog(QDialog):
         self.template_state = template_state
         self.created_bundles = created_bundles or []
         self.created_zip = created_zip
+        self.report_path = report_path or os.path.join(output_dir, "generation_report.txt")
+        self.elapsed_seconds = elapsed_seconds
 
         self.setWindowTitle("Generation Summary")
-        self.setFixedSize(540, 440)
+        self.setFixedSize(560, 480)
         self.setModal(True)
         self._build_ui()
 
@@ -585,6 +594,11 @@ class GenerationCompletedDialog(QDialog):
         c_layout.setSpacing(6)
         _lbl_style = "font-size: 13px; color: #111827;"
         c_layout.addWidget(_make_lbl(f"• <b>Successfully Generated:</b> {self.generated} results", _lbl_style))
+        if self.elapsed_seconds > 0:
+            c_layout.addWidget(_make_lbl(
+                f"• <b>Execution Time:</b> {self.elapsed_seconds:.2f} seconds",
+                _lbl_style,
+            ))
         if self.created_bundles:
             c_layout.addWidget(_make_lbl(
                 f"• <b>Class Print Bundles:</b> {len(self.created_bundles)} master print bundles created in <i>Print_Bundles</i> folder.",
@@ -606,6 +620,10 @@ class GenerationCompletedDialog(QDialog):
         c_layout.addWidget(_make_lbl(f"• <b>Skipped Records:</b> {self.skipped}", _lbl_style))
         c_layout.addWidget(_make_lbl(f"• <b>Failed Records:</b> {self.failed}", _lbl_style))
         c_layout.addWidget(_make_lbl(
+            f"• <b>Audit Report:</b> <span style='color: #059669; font-weight: 600;'>generation_report.txt</span> (Saved in destination)",
+            _lbl_style
+        ))
+        c_layout.addWidget(_make_lbl(
             f"• <b>Destination Folder:</b><br><span style='color: #4b5563;'>{self.output_dir}</span>",
             _lbl_style
         ))
@@ -617,7 +635,7 @@ class GenerationCompletedDialog(QDialog):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
 
-        open_btn = QPushButton("📁 Open Output Folder")
+        open_btn = QPushButton("📁 Open Folder")
         open_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         open_btn.setStyleSheet("""
             QPushButton {
@@ -628,6 +646,18 @@ class GenerationCompletedDialog(QDialog):
         """)
         open_btn.clicked.connect(self._on_open_folder)
         btn_row.addWidget(open_btn)
+
+        report_btn = QPushButton("📄 View Report")
+        report_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        report_btn.setStyleSheet("""
+            QPushButton {
+                background: #f3f4f6; color: #374151; border: 1px solid #d1d5db;
+                border-radius: 5px; padding: 8px 14px; font-weight: 600; font-size: 12px;
+            }
+            QPushButton:hover { background: #e5e7eb; color: #111827; }
+        """)
+        report_btn.clicked.connect(self._on_view_report)
+        btn_row.addWidget(report_btn)
 
         if self.failed > 0:
             view_failed_btn = QPushButton("🔍 View Failed Records")
@@ -659,6 +689,13 @@ class GenerationCompletedDialog(QDialog):
     def _on_open_folder(self) -> None:
         if os.path.exists(self.output_dir):
             os.startfile(self.output_dir)
+
+    def _on_view_report(self) -> None:
+        rep_p = self.report_path or os.path.join(self.output_dir, "generation_report.txt")
+        if os.path.exists(rep_p):
+            os.startfile(rep_p)
+        else:
+            QMessageBox.information(self, "Audit Report", f"Report file not found at:\n{rep_p}")
 
     def _on_view_failed(self) -> None:
         dlg = FailedRecordsDialog(self.failed_records, self.template_state, self.output_dir, self)

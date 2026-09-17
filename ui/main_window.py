@@ -327,6 +327,9 @@ class MainWindow(QMainWindow):
             )
 
         # 3. Worker Thread & Live Dashboard
+        dataset_name = self._dashboard_view.get_dataset_name()
+        template_path = template_state.get("background", {}).get("path", "")
+
         worker = GeneratorWorker(
             template_state=template_state,
             rows=rows_to_generate,
@@ -338,6 +341,8 @@ class MainWindow(QMainWindow):
             bundle_col=bundle_col,
             filename_pattern=naming_pattern,
             zip_package=zip_package,
+            dataset_name=dataset_name,
+            template_path=template_path,
         )
 
         prog_dlg = GenerationProgressDialog(worker, len(rows_to_generate), self)
@@ -355,6 +360,8 @@ class MainWindow(QMainWindow):
                 parent=self,
                 created_bundles=prog_dlg.created_bundles,
                 created_zip=prog_dlg.created_zip_path,
+                report_path=prog_dlg.report_path,
+                elapsed_seconds=prog_dlg.elapsed_seconds,
             )
             comp_dlg.exec()
 

@@ -846,6 +846,157 @@ def package_output_to_zip(
     return zip_path
 
 
+
+# ── Batch Audit & Execution Logging ──────────────────────────────────────────
+
+def write_generation_audit_report(
+    output_dir: str,
+    template_name: str = "Result Template",
+    template_id: str = "N/A",
+    template_path: str = "N/A",
+    dataset_name: str = "Dataset",
+    total_processed: int = 0,
+    succeeded_count: int = 0,
+    skipped_count: int = 0,
+    failed_count: int = 0,
+    failed_records: list[dict[str, Any]] | None = None,
+    skipped_records: list[dict[str, Any]] | list[tuple[int, str]] | None = None,
+    elapsed_seconds: float = 0.0,
+    start_time: datetime.datetime | None = None,
+    end_time: datetime.datetime | None = None,
+    created_bundles: list[str] | None = None,
+    created_zip_path: str = "",
+) -> str:
+    """
+    Generates a structured generation_report.txt in output_dir documenting:
+    - Timestamps (Start & End)
+    - Template details (Name, UUID, Path)
+    - Dataset name / source
+    - Total rows processed, succeeded, skipped, and failed
+    - Detailed list of skipped/failed rows with reasons
+    - Elapsed processing time in seconds
+    - Print bundles & ZIP archive info (if applicable)
+
+    Returns the absolute path to generation_report.txt.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    report_file = os.path.join(output_dir, "generation_report.txt")
+
+    if start_time is None:
+        start_time = datetime.datetime.now()
+    if end_time is None:
+        end_time = datetime.datetime.now()
+
+    start_str = start_time.strftime("%Y-%m-%d %H:%M:%S")
+    end_str = end_time.strftime("%Y-%m-%d %H:%M:%S")
+
+    success_pct = (succeeded_count / total_processed * 100.0) if total_processed > 0 else 0.0
+
+    lines: list[str] = [
+        "=" * 80,
+        "BATCH RESULT GENERATION AUDIT REPORT",
+        "=" * 80,
+        f"Generated        : {end_str}",
+        f"Execution Time   : {elapsed_seconds:.2f} seconds",
+        f"Session Window   : {start_str}  -->  {end_str}",
+        "",
+        "-" * 80,
+        "1. TEMPLATE CONFIGURATION",
+        "-" * 80,
+        f"Template Name    : {template_name or 'Result Template'}",
+        f"Template UUID    : {template_id or 'N/A'}",
+        f"Template Path    : {template_path or 'N/A'}",
+        "",
+        "-" * 80,
+        "2. DATASET & DESTINATION",
+        "-" * 80,
+        f"Dataset Source   : {dataset_name or 'Student Dataset'}",
+        f"Output Folder    : {output_dir}",
+        "",
+        "-" * 80,
+        "3. EXECUTION SUMMARY",
+        "-" * 80,
+        f"Total Records    : {total_processed}",
+        f"PDFs Succeeded   : {succeeded_count}",
+        f"Skipped Records  : {skipped_count}",
+        f"Failed Records   : {failed_count}",
+        f"Success Rate     : {success_pct:.1f}%",
+        "",
+        "-" * 80,
+        "4. PRINT BUNDLES & ARCHIVE",
+        "-" * 80,
+    ]
+
+    if created_bundles:
+        lines.append(f"Class Print Bundles : {len(created_bundles)} master bundles created:")
+        for b in created_bundles:
+            lines.append(f"  • {os.path.basename(b)} ({b})")
+    else:
+        lines.append("Class Print Bundles : None (disabled or not applicable)")
+
+    if created_zip_path:
+        lines.append(f"ZIP Archive         : {os.path.basename(created_zip_path)} ({created_zip_path})")
+    else:
+        lines.append("ZIP Archive         : None (disabled)")
+
+    lines.extend([
+        "",
+        "-" * 80,
+        "5. SKIPPED & FAILED RECORDS AUDIT LOG",
+        "-" * 80,
+    ])
+
+    has_issues = False
+
+    if skipped_records:
+        has_issues = True
+        lines.append("[SKIPPED RECORDS]")
+        for item in skipped_records:
+            if isinstance(item, dict):
+                r_num = item.get("row_num", item.get("row_index", "?"))
+                s_name = item.get("student_name", "Unknown")
+                u_val = item.get("unique_val", "")
+                reason = item.get("reason", item.get("error", "Skipped by user/validation"))
+                lines.append(f"  • Row {r_num} [{u_val} - {s_name}]: {reason}")
+            elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                lines.append(f"  • Row {item[0]}: {item[1]}")
+            else:
+                lines.append(f"  • {item}")
+        lines.append("")
+
+    if failed_records:
+        has_issues = True
+        lines.append("[FAILED RECORDS]")
+        for rec in failed_records:
+            if isinstance(rec, dict):
+                r_idx = rec.get("row_index", -1)
+                r_num = r_idx + 1 if r_idx >= 0 else rec.get("row_num", "?")
+                s_name = rec.get("student_name", "Unknown")
+                u_val = rec.get("unique_val", "")
+                err = rec.get("error", "Unknown render error")
+                lines.append(f"  • Row {r_num} [{u_val} - {s_name}]: {err}")
+            else:
+                lines.append(f"  • {rec}")
+        lines.append("")
+
+    if not has_issues:
+        lines.append("Zero skipped or failed records. All records processed cleanly with 100% fidelity.")
+        lines.append("")
+
+    lines.extend([
+        "=" * 80,
+        "END OF REPORT",
+        "=" * 80,
+        "",
+    ])
+
+    report_content = "\n".join(lines)
+    with open(report_file, "w", encoding="utf-8") as f:
+        f.write(report_content)
+
+    return report_file
+
+
 # ── Generator Worker (QThread) ───────────────────────────────────────────────
 
 class GeneratorWorker(QThread):
@@ -879,6 +1030,8 @@ class GeneratorWorker(QThread):
         bundle_col: str = "",
         filename_pattern: str = "",
         zip_package: bool = False,
+        dataset_name: str = "",
+        template_path: str = "",
     ) -> None:
         super().__init__(parent)
         self.template_state = template_state
@@ -891,11 +1044,19 @@ class GeneratorWorker(QThread):
         self.bundle_col = bundle_col
         self.filename_pattern = filename_pattern
         self.zip_package = zip_package
+        self.dataset_name = dataset_name
+        self.template_path = template_path
 
         self._cancelled = False
         self._mutex = QMutex()
         self._wait_condition = QWaitCondition()
         self._error_action = self.ACTION_SKIP
+
+        self.start_time: datetime.datetime | None = None
+        self.end_time: datetime.datetime | None = None
+        self.elapsed_seconds: float = 0.0
+        self.skipped_records_log: list[dict[str, Any]] = []
+        self.report_path: str = ""
 
         self.retry_counts: dict[int, int] = {}
         self.generated_files: list[str] = []
@@ -944,6 +1105,7 @@ class GeneratorWorker(QThread):
             pass
 
     def run(self) -> None:
+        self.start_time = datetime.datetime.now()
         total = len(self.rows)
         generated_count = 0
         skipped_count = 0
@@ -989,6 +1151,14 @@ class GeneratorWorker(QThread):
                     return
                 elif action == self.ACTION_SKIP:
                     skipped_count += 1
+                    self.skipped_records_log.append({
+                        "row_num": row_num,
+                        "student_name": row.get(self.name_col, "Unknown"),
+                        "unique_val": row.get(self.unique_col, f"Row {row_num}"),
+                        "reason": f"Empty cell in '{missing_col}'",
+                        "row_data": row,
+                        "row_index": idx,
+                    })
                     self.record_skipped.emit(row_num, f"Empty cell in '{missing_col}'")
                     idx += 1
                     continue
@@ -1074,7 +1244,7 @@ class GeneratorWorker(QThread):
         # ── Post-Processing: Smart Class-Wise Print Bundling ──────────────────
         if self.bundle_enabled and self.bundle_col and self.successful_records and not self._cancelled:
             self.progress.emit(
-                total, total, 98, "Print_Bundles", "Creating Class-Wise Print Bundles..."
+                total, total, 97, "Print_Bundles", "Creating Class-Wise Print Bundles..."
             )
             try:
                 self.created_bundles = create_class_print_bundles(
@@ -1086,13 +1256,13 @@ class GeneratorWorker(QThread):
         # ── Post-Processing: Automated ZIP Packaging ────────────────────────
         if self.zip_package and self.generated_files and not self._cancelled:
             self.progress.emit(
-                total, total, 99, "ZIP Packager", "Packaging output into ZIP archive..."
+                total, total, 98, "ZIP Packager", "Packaging output into ZIP archive..."
             )
             try:
                 def _on_zip_prog(cur_f: int, tot_f: int, fn: str) -> None:
-                    pct = 95 + int((cur_f / max(1, tot_f)) * 4)
+                    pct = 95 + int((cur_f / max(1, tot_f)) * 3)
                     self.progress.emit(
-                        cur_f, tot_f, min(99, pct), fn, f"Archiving {cur_f}/{tot_f} files into ZIP..."
+                        cur_f, tot_f, min(98, pct), fn, f"Archiving {cur_f}/{tot_f} files into ZIP..."
                     )
 
                 self.created_zip_path = package_output_to_zip(
@@ -1101,6 +1271,41 @@ class GeneratorWorker(QThread):
                 print(f"[DEBUG ZIP] Created ZIP archive: '{self.created_zip_path}'")
             except Exception as zip_err:
                 print(f"[DEBUG ZIP] ZIP packaging error: {zip_err}")
+
+        # ── Post-Processing: Batch Audit & Execution Logging ────────────────
+        self.end_time = datetime.datetime.now()
+        self.elapsed_seconds = max(0.0, (self.end_time - self.start_time).total_seconds()) if self.start_time else 0.0
+        template_name = self.template_state.get("template_name", "Result Template")
+        template_id = self.template_state.get("template_id", "N/A")
+        template_path = self.template_path or self.template_state.get("background", {}).get("path", "N/A")
+        dataset_name = self.dataset_name or "Student Dataset"
+
+        if not self._cancelled:
+            self.progress.emit(
+                total, total, 99, "Audit Log", "Writing generation audit report..."
+            )
+            try:
+                self.report_path = write_generation_audit_report(
+                    output_dir=self.output_dir,
+                    template_name=template_name,
+                    template_id=template_id,
+                    template_path=template_path,
+                    dataset_name=dataset_name,
+                    total_processed=total,
+                    succeeded_count=generated_count,
+                    skipped_count=skipped_count,
+                    failed_count=len(self.failed_records),
+                    failed_records=self.failed_records,
+                    skipped_records=self.skipped_records_log,
+                    elapsed_seconds=self.elapsed_seconds,
+                    start_time=self.start_time,
+                    end_time=self.end_time,
+                    created_bundles=self.created_bundles,
+                    created_zip_path=self.created_zip_path,
+                )
+                print(f"[DEBUG REPORT] Audit report written to: '{self.report_path}'")
+            except Exception as rep_err:
+                print(f"[DEBUG REPORT] Failed to write audit report: {rep_err}")
 
         # Successful completion -> remove recovery file
         if os.path.exists(self.recovery_file):
