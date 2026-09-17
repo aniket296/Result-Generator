@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (
 import pymupdf
 
 from data_engine.excel_loader import export_blank_excel_template
+from data_engine.header_normalizer import find_matching_header
 from ui.widgets.badge_item import BadgeItem
 from ui.widgets.chart_item import ChartItem
 from ui.widgets.field_item import FieldItem
@@ -265,7 +266,15 @@ class TemplateEditorView(QWidget):
 
     def set_excel_columns(self, headers: list[str]) -> None:
         self._excel_headers = list(headers)
+        if headers:
+            for f in self._field_items:
+                if not f.mapped_column or f.mapped_column not in headers:
+                    matched = find_matching_header(f.label, headers)
+                    if matched:
+                        f.set_mapped_column(matched)
         self._panel.set_excel_columns(headers)
+        if self._selected_item:
+            self._panel.load_item(self._selected_item)
 
     def set_locked_state(self, locked: bool, reason: str = "") -> None:
         """Lock or unlock template field modifications when an active dataset is attached."""
@@ -309,6 +318,11 @@ class TemplateEditorView(QWidget):
         cy = rect.center().y() - 18
 
         item = FieldItem(label=name, x=cx, y=cy, width=200, height=36)
+        if self._excel_headers:
+            matched = find_matching_header(name, self._excel_headers)
+            if matched:
+                item.set_mapped_column(matched)
+
         item.position_changed.connect(lambda x, y: self._on_item_moved(item, x, y))
         item.geometry_changed.connect(lambda w, h: self._on_item_resized(item, w, h))
 

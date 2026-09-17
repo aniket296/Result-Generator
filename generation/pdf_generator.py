@@ -28,6 +28,7 @@ from typing import Any, Callable
 from PyQt6.QtCore import QMutex, QObject, QThread, QWaitCondition, pyqtSignal
 import pymupdf
 
+from data_engine.header_normalizer import find_matching_header
 from utils.constants import RECOVERY_DIR
 
 # ── Optional matplotlib (Agg backend) for chart rendering ────────────────────
@@ -241,16 +242,25 @@ def _extract_field_value(f: dict[str, Any], row_data: dict[str, Any]) -> str:
     elif label and label in row_data:
         raw_val = row_data[label]
     else:
-        # 3. Fuzzy / case-insensitive / trimmed match
+        # 3. Dynamic alias & fuzzy matching
         candidates = [k for k in [mapped_col, label] if k]
+        available_cols = list(row_data.keys())
         for cand in candidates:
-            cand_clean = str(cand).strip().lower()
-            for rk, rv in row_data.items():
-                if str(rk).strip().lower() == cand_clean:
-                    raw_val = rv
-                    break
-            if raw_val is not None:
+            matched_col = find_matching_header(str(cand), available_cols)
+            if matched_col and matched_col in row_data:
+                raw_val = row_data[matched_col]
                 break
+
+        # Fallback: case-insensitive/trimmed iteration
+        if raw_val is None:
+            for cand in candidates:
+                cand_clean = str(cand).strip().lower()
+                for rk, rv in row_data.items():
+                    if str(rk).strip().lower() == cand_clean:
+                        raw_val = rv
+                        break
+                if raw_val is not None:
+                    break
 
     # 4. Explicit type casting & graceful handling of None, NaN, etc.
     if raw_val is None:

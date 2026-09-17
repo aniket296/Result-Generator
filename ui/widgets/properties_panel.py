@@ -40,6 +40,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from data_engine.header_normalizer import find_matching_header
 from ui.widgets.badge_item import BadgeItem
 from ui.widgets.chart_item import ChartItem
 from ui.widgets.field_item import FieldItem
@@ -198,8 +199,16 @@ class PropertiesPanel(QWidget):
 
                 self._label_edit.setText(item.label)
 
-                if item.mapped_column and item.mapped_column in self._excel_columns:
-                    self._column_combo.setCurrentText(item.mapped_column)
+                # Auto-resolve mapped column with header aliasing if unmapped or not in current columns
+                mapped_val = item.mapped_column
+                if not mapped_val or mapped_val not in self._excel_columns:
+                    matched = find_matching_header(item.label, self._excel_columns)
+                    if matched:
+                        mapped_val = matched
+                        item.set_mapped_column(matched)
+
+                if mapped_val and mapped_val in self._excel_columns:
+                    self._column_combo.setCurrentText(mapped_val)
                 else:
                     self._column_combo.setCurrentIndex(0)
 
