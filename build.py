@@ -56,12 +56,14 @@ def run_build(onefile=False):
             "--hidden-import=matplotlib.pyplot",
             "--hidden-import=matplotlib.figure",
             "--hidden-import=matplotlib.backends.backend_agg",
-            "--hidden-import=matplotlib.backends.backend_pdf",
             "--exclude-module=tkinter",
             "--exclude-module=scipy",
             "--exclude-module=IPython",
-            "main.py"
         ]
+        ico_file = os.path.join(PROJECT_DIR, "installer", "assets", "app_icon.ico")
+        if os.path.exists(ico_file):
+            cmd.append(f"--icon={ico_file}")
+        cmd.append("main.py")
     else:
         # Use spec file for onedir
         cmd = [sys.executable, "-m", "PyInstaller", SPEC_FILE]

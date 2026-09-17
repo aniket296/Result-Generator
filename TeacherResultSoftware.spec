@@ -64,6 +64,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=os.path.join(os.path.dirname(os.path.abspath(SPEC)), 'installer', 'assets', 'app_icon.ico') if os.path.exists(os.path.join(os.path.dirname(os.path.abspath(SPEC)), 'installer', 'assets', 'app_icon.ico')) else None,
 )
 
 coll = COLLECT(
