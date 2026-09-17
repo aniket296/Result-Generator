@@ -69,31 +69,105 @@ def sanitize_filename_part(text: str) -> str:
     return cleaned if cleaned else "UNNAMED"
 
 
-def get_unique_result_filename(
-    output_dir: str,
-    unique_val: str,
-    student_name: str,
+def format_filename_from_pattern(
+    pattern: str,
+    row: dict[str, str],
+    row_index: int = 1,
+    default_pattern: str = "[Enrollment number]_[Name].pdf",
     ext: str = ".PDF",
 ) -> str:
     """
-    Constructs the exact uppercase filename: UNIQUEFIELD_STUDENTNAME.PDF
-    with collision handling (_01, _02, ..., _100) and reserved name protection.
+    Parse bracketed tokens like [Column_Name] in pattern and substitute with row values.
+    - Matches tokens exact or normalized/case-insensitively against row keys.
+    - Strips illegal Windows filename characters (\\ / : * ? " < > |).
+    - Falls back safely to index naming (e.g. REC{row_index}) if a column value is missing or blank.
+    - Enforces reserved Windows device name protection and uppercase extension.
     """
-    u = sanitize_filename_part(unique_val)
-    s = sanitize_filename_part(student_name)[:40].strip(" ._")
-    if not s:
-        s = "UNNAMED"
+    raw_pattern = (pattern or default_pattern).strip()
+    if raw_pattern.lower().endswith(".pdf"):
+        raw_pattern = raw_pattern[:-4]
 
-    base_name = f"{u}_{s}".upper()
+    if not raw_pattern:
+        raw_pattern = "[Enrollment number]_[Name]"
+
+    def replace_token(match: re.Match) -> str:
+        token = match.group(1).strip()
+        val = ""
+        # 1. Exact match in row
+        if token in row:
+            val = str(row[token] or "").strip()
+        else:
+            # 2. Case-insensitive / fuzzy match
+            matched_key = find_matching_header(token, list(row.keys()))
+            if matched_key and matched_key in row:
+                val = str(row[matched_key] or "").strip()
+
+        # 3. Fallback safely to index naming if missing or blank
+        if not val or val.lower() == "nan":
+            lowered = token.lower()
+            if any(k in lowered for k in ["roll", "enroll", "id", "num"]):
+                val = f"REC{row_index}"
+            elif any(k in lowered for k in ["name", "student"]):
+                val = f"STUDENT_{row_index}"
+            else:
+                val = f"ROW{row_index}"
+
+        return sanitize_filename_part(val)
+
+    # Substitute [Tokens]
+    result_base = re.sub(r'\[([^\]]+)\]', replace_token, raw_pattern)
+
+    # Sanitize literal characters outside tokens
+    result_base = re.sub(r'[\\/:*?"<>|\x00-\x1f]', '_', result_base)
+    result_base = re.sub(r'[\s_]+', '_', result_base)
+    result_base = result_base.strip(" ._")
+
+    if not result_base:
+        result_base = f"RESULT_{row_index}"
+
+    result_base = result_base.upper()
 
     # Reserved names check
-    first_token = base_name.split("_")[0]
+    first_token = result_base.split("_")[0]
     if first_token in RESERVED_WINDOWS_NAMES:
-        base_name = f"RESULT_{base_name}"
+        result_base = f"RESULT_{result_base}"
 
-    ext = ext.upper() if ext.startswith(".") else f".{ext.upper()}"
+    ext_clean = ext.upper() if ext.startswith(".") else f".{ext.upper()}"
+    return f"{result_base}{ext_clean}"
 
-    candidate_path = os.path.join(output_dir, f"{base_name}{ext}")
+
+def get_unique_result_filename(
+    output_dir: str,
+    unique_val: str = "",
+    student_name: str = "",
+    ext: str = ".PDF",
+    pattern: str = "",
+    row_data: dict[str, str] | None = None,
+    row_index: int = 1,
+) -> str:
+    """
+    Constructs the exact uppercase filename with collision handling (_01, _02, ..., _100)
+    and reserved name protection. Supports tokenized dynamic pattern when pattern and row_data are given.
+    """
+    if pattern and row_data is not None:
+        filename = format_filename_from_pattern(pattern, row_data, row_index=row_index, ext=ext)
+        base_name, file_ext = os.path.splitext(filename)
+    else:
+        u = sanitize_filename_part(unique_val)
+        s = sanitize_filename_part(student_name)[:40].strip(" ._")
+        if not s:
+            s = "UNNAMED"
+
+        base_name = f"{u}_{s}".upper()
+
+        # Reserved names check
+        first_token = base_name.split("_")[0]
+        if first_token in RESERVED_WINDOWS_NAMES:
+            base_name = f"RESULT_{base_name}"
+
+        file_ext = ext.upper() if ext.startswith(".") else f".{ext.upper()}"
+
+    candidate_path = os.path.join(output_dir, f"{base_name}{file_ext}")
     if not os.path.exists(candidate_path):
         return candidate_path
 
@@ -101,7 +175,7 @@ def get_unique_result_filename(
     counter = 1
     while True:
         suffix = f"_{counter:02d}" if counter < 100 else f"_{counter}"
-        candidate_path = os.path.join(output_dir, f"{base_name}{suffix}{ext}")
+        candidate_path = os.path.join(output_dir, f"{base_name}{suffix}{file_ext}")
         if not os.path.exists(candidate_path):
             return candidate_path
         counter += 1
@@ -110,9 +184,10 @@ def get_unique_result_filename(
 def preview_filenames(
     output_dir: str,
     rows: list[dict[str, str]],
-    unique_col: str,
-    name_col: str,
+    unique_col: str = "",
+    name_col: str = "",
     ext: str = ".PDF",
+    pattern: str = "",
 ) -> list[tuple[int, str]]:
     """
     Generate accurate preview of final filenames.
@@ -134,17 +209,19 @@ def preview_filenames(
 
     for idx in target_indices:
         row = rows[idx]
-        u = row.get(unique_col, f"REC{idx+1}")
-        s = row.get(name_col, "")
+        if pattern:
+            filename = format_filename_from_pattern(pattern, row, row_index=idx + 1, ext=ext)
+            base, ext_clean = os.path.splitext(filename)
+        else:
+            u = row.get(unique_col, f"REC{idx+1}")
+            s = row.get(name_col, "")
+            u_clean = sanitize_filename_part(u)
+            s_clean = sanitize_filename_part(s)[:40].strip(" ._") or "UNNAMED"
+            base = f"{u_clean}_{s_clean}".upper()
+            if base.split("_")[0] in RESERVED_WINDOWS_NAMES:
+                base = f"RESULT_{base}"
+            ext_clean = ext.upper() if ext.startswith(".") else f".{ext.upper()}"
 
-        # Compute candidate
-        u_clean = sanitize_filename_part(u)
-        s_clean = sanitize_filename_part(s)[:40].strip(" ._") or "UNNAMED"
-        base = f"{u_clean}_{s_clean}".upper()
-        if base.split("_")[0] in RESERVED_WINDOWS_NAMES:
-            base = f"RESULT_{base}"
-        
-        ext_clean = ext.upper() if ext.startswith(".") else f".{ext.upper()}"
         candidate = os.path.join(output_dir, f"{base}{ext_clean}")
 
         if os.path.exists(candidate) or candidate in simulated_used_paths:
@@ -748,6 +825,7 @@ class GeneratorWorker(QThread):
         operation_id: str | None = None,
         bundle_enabled: bool = False,
         bundle_col: str = "",
+        filename_pattern: str = "",
     ) -> None:
         super().__init__(parent)
         self.template_state = template_state
@@ -758,6 +836,7 @@ class GeneratorWorker(QThread):
         self.operation_id = operation_id or uuid.uuid4().hex[:12]
         self.bundle_enabled = bundle_enabled
         self.bundle_col = bundle_col
+        self.filename_pattern = filename_pattern
 
         self._cancelled = False
         self._mutex = QMutex()
@@ -768,15 +847,6 @@ class GeneratorWorker(QThread):
         self.generated_files: list[str] = []
         self.successful_records: list[tuple[dict[str, str], str]] = []
         self.created_bundles: list[str] = []
-        self.failed_records: list[dict[str, Any]] = []
-
-        self._cancelled = False
-        self._mutex = QMutex()
-        self._wait_condition = QWaitCondition()
-        self._error_action = self.ACTION_SKIP
-
-        self.retry_counts: dict[int, int] = {}
-        self.generated_files: list[str] = []
         self.failed_records: list[dict[str, Any]] = []
 
         self.recovery_file = os.path.join(
@@ -883,9 +953,18 @@ class GeneratorWorker(QThread):
                     continue
 
             # Construct safe filename
-            u_val = row.get(self.unique_col, f"REC{row_num}")
-            s_val = row.get(self.name_col, "")
-            out_file = get_unique_result_filename(self.output_dir, u_val, s_val, ".PDF")
+            if self.filename_pattern:
+                out_file = get_unique_result_filename(
+                    self.output_dir,
+                    ext=".PDF",
+                    pattern=self.filename_pattern,
+                    row_data=row,
+                    row_index=row_num,
+                )
+            else:
+                u_val = row.get(self.unique_col, f"REC{row_num}")
+                s_val = row.get(self.name_col, "")
+                out_file = get_unique_result_filename(self.output_dir, u_val, s_val, ".PDF")
             filename_only = os.path.basename(out_file)
 
             # Update progress

@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -30,6 +31,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from utils.constants import DEFAULT_NAMING_PATTERN
 
 from generation.pdf_generator import (
     GeneratorWorker,
@@ -63,6 +65,7 @@ class GenerationSetupDialog(QDialog):
         parent=None,
         init_bundle_enabled: bool = False,
         init_bundle_col: str = "",
+        init_naming_pattern: str = DEFAULT_NAMING_PATTERN,
     ) -> None:
         super().__init__(parent)
         self.template_name = template_name or "Result"
@@ -70,13 +73,14 @@ class GenerationSetupDialog(QDialog):
         self.rows = rows
         self.init_bundle_enabled = init_bundle_enabled
         self.init_bundle_col = init_bundle_col
+        self.init_naming_pattern = init_naming_pattern or DEFAULT_NAMING_PATTERN
 
         self.selected_dir: str = os.path.join(os.path.expanduser("~"), "Desktop")
         self.unique_column: str = ""
         self.name_column: str = ""
 
         self.setWindowTitle("Result Generation Setup")
-        self.setFixedSize(620, 640)
+        self.setFixedSize(620, 670)
         self.setModal(True)
         self._build_ui()
         self._update_preview()
@@ -88,6 +92,10 @@ class GenerationSetupDialog(QDialog):
     @property
     def bundle_column(self) -> str:
         return self._bundle_combo.currentText()
+
+    @property
+    def naming_pattern(self) -> str:
+        return self._pattern_edit.text().strip() if hasattr(self, "_pattern_edit") else self.init_naming_pattern
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -136,8 +144,8 @@ class GenerationSetupDialog(QDialog):
         self._subfolder_cb.toggled.connect(self._update_preview)
         layout.addWidget(self._subfolder_cb)
 
-        # Mapping Columns (Unique ID + Student Name)
-        cols_box = QGroupBox("Filename Formatting Columns")
+        # Mapping Columns & Pattern
+        cols_box = QGroupBox("Filename Formatting & Dynamic Pattern")
         cols_box.setStyleSheet("""
             QGroupBox {
                 font-size: 12px; font-weight: 600; color: #374151;
@@ -147,6 +155,25 @@ class GenerationSetupDialog(QDialog):
         """)
         c_layout = QVBoxLayout(cols_box)
         c_layout.setSpacing(6)
+
+        # File Naming Pattern Row
+        pat_row = QHBoxLayout()
+        pat_lbl = QLabel("File Naming Pattern:")
+        pat_lbl.setStyleSheet("font-size: 12px; font-weight: 600; color: #374151;")
+        pat_row.addWidget(pat_lbl)
+
+        self._pattern_edit = QLineEdit(self.init_naming_pattern)
+        self._pattern_edit.setStyleSheet("""
+            QLineEdit {
+                border: 1px solid #d1d5db; border-radius: 4px;
+                padding: 4px 8px; font-size: 12px; font-family: Consolas, monospace;
+                background: white; color: #111827;
+            }
+            QLineEdit:focus { border-color: #3b82f6; }
+        """)
+        self._pattern_edit.textChanged.connect(self._update_preview)
+        pat_row.addWidget(self._pattern_edit, stretch=1)
+        c_layout.addLayout(pat_row)
 
         # Unique Col
         u_row = QHBoxLayout()
@@ -300,9 +327,10 @@ class GenerationSetupDialog(QDialog):
     def _update_preview(self) -> None:
         u_col = self._unique_combo.currentText()
         n_col = self._name_combo.currentText()
+        pattern = self._pattern_edit.text().strip() if hasattr(self, "_pattern_edit") else ""
         eff_dir = self.get_effective_output_dir()
 
-        previews = preview_filenames(eff_dir, self.rows, u_col, n_col, ".PDF")
+        previews = preview_filenames(eff_dir, self.rows, u_col, n_col, ".PDF", pattern=pattern)
         if not previews:
             self._preview_label.setText("No records available in dataset.")
             return

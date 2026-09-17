@@ -6,7 +6,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QSettings, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
@@ -22,6 +23,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from utils.constants import DEFAULT_NAMING_PATTERN
 
 from data_engine.excel_loader import (
     export_dataset_backup,
@@ -217,17 +219,50 @@ class DashboardView(QWidget):
         ops_row.addWidget(gen_all_btn)
         v.addWidget(ops_group)
 
-        # Class-Wise Print Bundling
-        bundle_box = QGroupBox("Print Bundling")
-        bundle_box.setStyleSheet("""
+        # Output Configuration & Print Bundling
+        options_box = QGroupBox("Output Configuration & Print Bundling")
+        options_box.setStyleSheet("""
             QGroupBox {
                 font-size: 13px; font-weight: 700; color: #1a1a2e;
                 border: 1px solid #e5e7eb; border-radius: 8px;
                 padding-top: 14px; background: white;
             }
         """)
-        bundle_layout = QHBoxLayout(bundle_box)
-        bundle_layout.setContentsMargins(14, 10, 14, 10)
+        options_layout = QVBoxLayout(options_box)
+        options_layout.setContentsMargins(14, 10, 14, 10)
+        options_layout.setSpacing(10)
+
+        # File Naming Pattern Row
+        pattern_row = QHBoxLayout()
+        pattern_row.setSpacing(10)
+
+        pattern_lbl = QLabel("File Naming Pattern:")
+        pattern_lbl.setStyleSheet("font-size: 12px; font-weight: 600; color: #374151;")
+
+        settings = QSettings("TeacherResultSoftware", "ResultGenerator")
+        saved_pattern = settings.value("naming_pattern", DEFAULT_NAMING_PATTERN)
+
+        self._pattern_input = QLineEdit(saved_pattern)
+        self._pattern_input.setStyleSheet("""
+            QLineEdit {
+                border: 1px solid #d1d5db; border-radius: 4px;
+                padding: 5px 10px; font-size: 12px; font-family: Consolas, monospace;
+                background: white; color: #111827;
+            }
+            QLineEdit:focus { border-color: #3b82f6; }
+        """)
+        self._pattern_input.textChanged.connect(self._on_pattern_changed)
+
+        pattern_hint = QLabel("💡 Tokens: [Enrollment number], [Name], [Roll No], etc.")
+        pattern_hint.setStyleSheet("font-size: 11px; color: #6b7280; font-style: italic;")
+
+        pattern_row.addWidget(pattern_lbl)
+        pattern_row.addWidget(self._pattern_input, stretch=1)
+        pattern_row.addWidget(pattern_hint)
+        options_layout.addLayout(pattern_row)
+
+        # Print Bundling Row
+        bundle_layout = QHBoxLayout()
         bundle_layout.setSpacing(12)
 
         self._bundle_cb = QCheckBox("Generate Class-Wise Print Bundles")
@@ -254,7 +289,8 @@ class DashboardView(QWidget):
         self._bundle_col_lbl.hide()
         self._bundle_col_combo.hide()
 
-        v.addWidget(bundle_box)
+        options_layout.addLayout(bundle_layout)
+        v.addWidget(options_box)
 
         # Columns + Validation
         cols_row = QHBoxLayout()
@@ -480,6 +516,16 @@ class DashboardView(QWidget):
 
     def get_bundle_options(self) -> tuple[bool, str]:
         return self._bundle_cb.isChecked(), self._bundle_col_combo.currentText()
+
+    def get_naming_pattern(self) -> str:
+        if hasattr(self, "_pattern_input"):
+            return self._pattern_input.text().strip() or DEFAULT_NAMING_PATTERN
+        settings = QSettings("TeacherResultSoftware", "ResultGenerator")
+        return str(settings.value("naming_pattern", DEFAULT_NAMING_PATTERN))
+
+    def _on_pattern_changed(self, text: str) -> None:
+        settings = QSettings("TeacherResultSoftware", "ResultGenerator")
+        settings.setValue("naming_pattern", text.strip() or DEFAULT_NAMING_PATTERN)
 
     def _on_clear(self) -> None:
         self._headers = []

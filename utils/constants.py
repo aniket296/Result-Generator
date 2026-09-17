@@ -1,4 +1,4 @@
-﻿"""
+"""
 Application-wide constants, path helpers, and system utilities.
 """
 from __future__ import annotations
@@ -11,6 +11,7 @@ APP_DATA_DIR = os.path.join(os.environ.get("APPDATA", ""), "TeacherResultSoftwar
 TEMPLATES_DIR = os.path.join(APP_DATA_DIR, "templates")
 DATASETS_DIR = os.path.join(APP_DATA_DIR, "datasets")
 RECOVERY_DIR = os.path.join(APP_DATA_DIR, "recovery")
+DEFAULT_NAMING_PATTERN = "[Enrollment number]_[Name].pdf"
 
 # Ensure required storage directories exist
 os.makedirs(APP_DATA_DIR, exist_ok=True)

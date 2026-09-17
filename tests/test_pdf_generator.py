@@ -720,5 +720,82 @@ class TestFieldExactPositioning(unittest.TestCase):
         self.assertLess(word_y0, 235.0)
 
 
+class TestFormatFilenameFromPattern(unittest.TestCase):
+    def test_default_pattern_substitution(self):
+        from generation.pdf_generator import format_filename_from_pattern
+        row = {"Enrollment number": "EN-2026", "Name": "Aarav Sharma"}
+        fname = format_filename_from_pattern("[Enrollment number]_[Name].pdf", row, row_index=1)
+        self.assertEqual(fname, "EN-2026_AARAV_SHARMA.PDF")
+
+    def test_case_insensitive_token_matching(self):
+        from generation.pdf_generator import format_filename_from_pattern
+        row = {"roll_no": "101", "student_name": "Diya Patel"}
+        fname = format_filename_from_pattern("[Roll No]_[Student Name].pdf", row, row_index=1)
+        self.assertEqual(fname, "101_DIYA_PATEL.PDF")
+
+    def test_strips_illegal_windows_characters(self):
+        from generation.pdf_generator import format_filename_from_pattern
+        row = {"ID": "A/B:C*D?E<F>G|H", "Name": 'Test "Student"'}
+        fname = format_filename_from_pattern("[ID] - [Name].pdf", row, row_index=1)
+        self.assertNotIn("/", fname)
+        self.assertNotIn(":", fname)
+        self.assertNotIn("*", fname)
+        self.assertNotIn("?", fname)
+        self.assertNotIn("<", fname)
+        self.assertNotIn(">", fname)
+        self.assertNotIn("|", fname)
+        self.assertNotIn('"', fname)
+
+    def test_missing_or_blank_token_fallback(self):
+        from generation.pdf_generator import format_filename_from_pattern
+        row = {"Enrollment number": "", "Name": None}
+        fname = format_filename_from_pattern("[Enrollment number]_[Name].pdf", row, row_index=5)
+        self.assertEqual(fname, "REC5_STUDENT_5.PDF")
+
+    def test_custom_tokens_and_literals(self):
+        from generation.pdf_generator import format_filename_from_pattern
+        row = {"Class": "10-B", "Roll No": "45", "Name": "Rohan"}
+        fname = format_filename_from_pattern("Result_[Class]_[Roll No]_[Name]", row, row_index=1)
+        self.assertEqual(fname, "RESULT_10-B_45_ROHAN.PDF")
+
+    def test_reserved_windows_names(self):
+        from generation.pdf_generator import format_filename_from_pattern
+        row = {"Name": "CON"}
+        fname = format_filename_from_pattern("[Name].pdf", row, row_index=1)
+        self.assertTrue(fname.startswith("RESULT_CON"))
+
+    def test_unique_result_filename_with_pattern_collision(self):
+        from generation.pdf_generator import get_unique_result_filename
+        tmp = tempfile.mkdtemp()
+        try:
+            row = {"Enrollment number": "EN001", "Name": "Alice"}
+            # Create first
+            p1 = get_unique_result_filename(tmp, pattern="[Enrollment number]_[Name].pdf", row_data=row, row_index=1)
+            self.assertEqual(os.path.basename(p1), "EN001_ALICE.PDF")
+            with open(p1, "w") as f:
+                f.write("test")
+
+            # Create second (collision)
+            p2 = get_unique_result_filename(tmp, pattern="[Enrollment number]_[Name].pdf", row_data=row, row_index=1)
+            self.assertEqual(os.path.basename(p2), "EN001_ALICE_01.PDF")
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_preview_filenames_with_pattern(self):
+        from generation.pdf_generator import preview_filenames
+        tmp = tempfile.mkdtemp()
+        try:
+            rows = [
+                {"Enrollment": "E1", "Student": "Alice"},
+                {"Enrollment": "E2", "Student": "Bob"},
+            ]
+            prevs = preview_filenames(tmp, rows, pattern="[Enrollment]_[Student].pdf")
+            self.assertEqual(len(prevs), 2)
+            self.assertEqual(prevs[0], (1, "E1_ALICE.PDF"))
+            self.assertEqual(prevs[1], (2, "E2_BOB.PDF"))
+        finally:
+            shutil.rmtree(tmp)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
