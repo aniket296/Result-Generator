@@ -24,6 +24,8 @@ class ChartItem(QGraphicsObject):
 
     position_changed = pyqtSignal(float, float)
     geometry_changed = pyqtSignal(float, float)
+    move_committed   = pyqtSignal(object, QPointF, QPointF)
+    resize_committed = pyqtSignal(object, float, float, float, float)
 
     HANDLE_SIZE: int = 10   # px – resize handle square side length
     ITEM_TYPE:   str = "chart"
@@ -161,6 +163,7 @@ class ChartItem(QGraphicsObject):
             event.accept()
         else:
             self._resizing = False
+            self._drag_start_pos = QPointF(self.pos())
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
@@ -176,8 +179,15 @@ class ChartItem(QGraphicsObject):
             super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
-        self._resizing = False
-        super().mouseReleaseEvent(event)
+        if self._resizing:
+            self._resizing = False
+            super().mouseReleaseEvent(event)
+            if (self._width, self._height) != (self._resize_start_w, self._resize_start_h):
+                self.resize_committed.emit(self, self._resize_start_w, self._resize_start_h, self._width, self._height)
+        else:
+            super().mouseReleaseEvent(event)
+            if hasattr(self, "_drag_start_pos") and self.pos() != self._drag_start_pos:
+                self.move_committed.emit(self, self._drag_start_pos, QPointF(self.pos()))
 
     # ── Hover ─────────────────────────────────────────────────────────────────
 

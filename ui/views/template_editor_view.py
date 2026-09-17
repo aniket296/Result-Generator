@@ -17,8 +17,8 @@ import json
 import os
 import uuid
 
-from PyQt6.QtCore import QRectF, Qt
-from PyQt6.QtGui import QBrush, QColor, QPainter, QPixmap
+from PyQt6.QtCore import QPointF, QRectF, Qt
+from PyQt6.QtGui import QBrush, QColor, QKeySequence, QPainter, QPixmap, QUndoStack
 from PyQt6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -37,6 +37,14 @@ import pymupdf
 
 from data_engine.excel_loader import export_blank_excel_template
 from data_engine.header_normalizer import find_matching_header
+from ui.undo_commands import (
+    AddItemCommand,
+    ChangePropertyCommand,
+    DeleteItemCommand,
+    MoveItemCommand,
+    MoveMultipleItemsCommand,
+    ResizeItemCommand,
+)
 from ui.widgets.badge_item import BadgeItem
 from ui.widgets.chart_item import ChartItem
 from ui.widgets.field_item import FieldItem
@@ -91,6 +99,10 @@ class TemplateEditorView(QWidget):
         self._is_locked: bool = False
         self._snap_to_grid: bool = True
 
+        # Undo / Redo Architecture
+        self._undo_stack = QUndoStack(self)
+        self._undo_stack.cleanChanged.connect(self._on_undo_clean_changed)
+
         self._build_ui()
 
     # ── UI Construction ───────────────────────────────────────────────────────
@@ -129,6 +141,15 @@ class TemplateEditorView(QWidget):
 
         outer.addLayout(main_layout, stretch=1)
 
+        # Keyboard shortcuts for Undo / Redo
+        undo_action = self._undo_stack.createUndoAction(self, "Undo")
+        undo_action.setShortcut(QKeySequence.StandardKey.Undo)
+        self.addAction(undo_action)
+
+        redo_action = self._undo_stack.createRedoAction(self, "Redo")
+        redo_action.setShortcuts([QKeySequence.StandardKey.Redo, QKeySequence("Ctrl+Shift+Z")])
+        self.addAction(redo_action)
+
     def _build_toolbar(self) -> QWidget:
         bar = QWidget()
         bar.setFixedHeight(54)
@@ -165,6 +186,16 @@ class TemplateEditorView(QWidget):
         self._snap_btn.setToolTip("Toggle magnetic snap to 10px grid boundaries")
         self._update_snap_btn_style()
         self._snap_btn.toggled.connect(self._on_toggle_snap)
+
+        # Undo / Redo Toolbar Buttons
+        self._undo_btn        = self._tool_btn("↩  Undo", self._undo_stack.undo)
+        self._undo_btn.setToolTip("Undo last action (Ctrl+Z)")
+        self._undo_btn.setEnabled(False)
+        self._redo_btn        = self._tool_btn("↪  Redo", self._undo_stack.redo)
+        self._redo_btn.setToolTip("Redo last action (Ctrl+Y / Ctrl+Shift+Z)")
+        self._redo_btn.setEnabled(False)
+        self._undo_stack.canUndoChanged.connect(self._undo_btn.setEnabled)
+        self._undo_stack.canRedoChanged.connect(self._redo_btn.setEnabled)
 
         # Multi-Item Alignment Buttons
         self._align_left_btn   = self._tool_btn("⇤  Left",      self._on_align_left)
@@ -210,6 +241,8 @@ class TemplateEditorView(QWidget):
         row.addWidget(self._add_chart_btn)
         row.addWidget(self._add_badge_btn)
         row.addWidget(self._snap_btn)
+        row.addWidget(self._undo_btn)
+        row.addWidget(self._redo_btn)
         row.addWidget(self._align_left_btn)
         row.addWidget(self._align_center_btn)
         row.addWidget(self._align_right_btn)
@@ -237,37 +270,37 @@ class TemplateEditorView(QWidget):
         # ── Field-only signals ──────────────────────────────────────────
         p.label_changed.connect(self._on_label_changed)
         p.column_changed.connect(
-            lambda c: self._apply_to_field(lambda i: i.set_mapped_column(c))
+            lambda c: self._change_property(self._selected_item, "mapped_column", c)
         )
         p.unique_changed.connect(
-            lambda u: self._apply_to_field(lambda i: i.set_is_unique(u))
+            lambda u: self._change_property(self._selected_item, "is_unique", u)
         )
         p.font_family_changed.connect(
-            lambda f: self._apply_to_field(lambda i: i.set_font_family(f))
+            lambda f: self._change_property(self._selected_item, "font_family", f)
         )
         p.font_size_changed.connect(
-            lambda s: self._apply_to_field(lambda i: i.set_font_size(s))
+            lambda s: self._change_property(self._selected_item, "font_size", s)
         )
         p.color_changed.connect(
-            lambda c: self._apply_to_field(lambda i: i.set_color(c))
+            lambda c: self._change_property(self._selected_item, "color", c)
         )
         p.bold_changed.connect(
-            lambda b: self._apply_to_field(lambda i: i.set_bold(b))
+            lambda b: self._change_property(self._selected_item, "bold", b)
         )
         p.italic_changed.connect(
-            lambda it: self._apply_to_field(lambda i: i.set_italic(it))
+            lambda it: self._change_property(self._selected_item, "italic", it)
         )
         p.underline_changed.connect(
-            lambda un: self._apply_to_field(lambda i: i.set_underline(un))
+            lambda un: self._change_property(self._selected_item, "underline", un)
         )
         p.multiline_changed.connect(
-            lambda ml: self._apply_to_field(lambda i: i.set_multiline(ml))
+            lambda ml: self._change_property(self._selected_item, "multiline", ml)
         )
         p.alignment_changed.connect(
-            lambda a: self._apply_to_field(lambda i: i.set_alignment(a))
+            lambda a: self._change_property(self._selected_item, "alignment", a)
         )
         p.v_alignment_changed.connect(
-            lambda va: self._apply_to_field(lambda i: i.set_v_alignment(va))
+            lambda va: self._change_property(self._selected_item, "v_alignment", va)
         )
 
         # ── Geometry (shared by FieldItem, ChartItem, BadgeItem) ───────
@@ -279,18 +312,18 @@ class TemplateEditorView(QWidget):
 
         # ── Chart-only signals ──────────────────────────────────────────
         p.chart_columns_changed.connect(
-            lambda cols: self._apply_to_chart(lambda i: i.set_chart_columns(cols))
+            lambda cols: self._change_property(self._selected_item, "chart_columns", cols)
         )
         p.chart_style_changed.connect(
-            lambda s: self._apply_to_chart(lambda i: i.set_chart_style(s))
+            lambda s: self._change_property(self._selected_item, "chart_style", s)
         )
 
         # ── Badge-only signals ──────────────────────────────────────────
         p.badge_image_changed.connect(
-            lambda path: self._apply_to_badge(lambda i: i.set_badge_image(path))
+            lambda path: self._change_property(self._selected_item, "badge_image", path)
         )
         p.badge_rule_changed.connect(
-            lambda col, op, val: self._apply_to_badge(lambda i: i.set_rule(col, op, val))
+            lambda col, op, val: self._change_property(self._selected_item, "rule", (col, op, val))
         )
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -358,6 +391,33 @@ class TemplateEditorView(QWidget):
     def _all_canvas_items(self) -> list[FieldItem | ChartItem | BadgeItem]:
         return list(self._field_items) + list(self._chart_items) + list(self._badge_items)
 
+    def _on_undo_clean_changed(self, clean: bool) -> None:
+        self._has_unsaved_changes = not clean
+
+    def _change_property(self, item: Any, prop_name: str, new_value: Any) -> None:
+        if not item:
+            return
+        old_val = getattr(item, prop_name, None)
+        if prop_name == "rule" and isinstance(item, BadgeItem):
+            old_val = (item.rule_column, item.rule_operator, item.rule_value)
+        elif prop_name == "badge_image" and isinstance(item, BadgeItem):
+            old_val = item.badge_image_path
+
+        if old_val != new_value:
+            self._undo_stack.push(
+                ChangePropertyCommand(self, item, prop_name, old_val, new_value)
+            )
+
+    def _on_item_move_committed(self, item: Any, old_pos: QPointF, new_pos: QPointF) -> None:
+        if old_pos != new_pos:
+            self._undo_stack.push(MoveItemCommand(self, item, old_pos, new_pos))
+
+    def _on_item_resize_committed(
+        self, item: Any, old_w: float, old_h: float, new_w: float, new_h: float
+    ) -> None:
+        if (old_w, old_h) != (new_w, new_h):
+            self._undo_stack.push(ResizeItemCommand(self, item, (old_w, old_h), (new_w, new_h)))
+
     # ── Actions ───────────────────────────────────────────────────────────────
 
     def _on_add_field(self) -> None:
@@ -386,15 +446,12 @@ class TemplateEditorView(QWidget):
             if matched:
                 item.set_mapped_column(matched)
 
-        item.position_changed.connect(lambda x, y: self._on_item_moved(item, x, y))
-        item.geometry_changed.connect(lambda w, h: self._on_item_resized(item, w, h))
+        item.position_changed.connect(lambda x, y, it=item: self._on_item_moved(it, x, y))
+        item.geometry_changed.connect(lambda w, h, it=item: self._on_item_resized(it, w, h))
+        item.move_committed.connect(lambda it, op, np: self._on_item_move_committed(it, op, np))
+        item.resize_committed.connect(lambda it, ow, oh, nw, nh: self._on_item_resize_committed(it, ow, oh, nw, nh))
 
-        self._scene.addItem(item)
-        self._field_items.append(item)
-
-        self._scene.clearSelection()
-        item.setSelected(True)
-        self._mark_dirty()
+        self._undo_stack.push(AddItemCommand(self, item, item_type="field"))
 
     def _on_add_chart(self) -> None:
         if self._is_locked:
@@ -414,19 +471,15 @@ class TemplateEditorView(QWidget):
             x=cx, y=cy, width=300, height=200,
         )
         item.set_snap_to_grid(self._snap_to_grid, 10.0)
-        # Pre-select all numeric-looking columns if headers already loaded
         if self._excel_headers:
             item.chart_columns = list(self._excel_headers)
 
-        item.position_changed.connect(lambda x, y: self._on_item_moved(item, x, y))
-        item.geometry_changed.connect(lambda w, h: self._on_item_resized(item, w, h))
+        item.position_changed.connect(lambda x, y, it=item: self._on_item_moved(it, x, y))
+        item.geometry_changed.connect(lambda w, h, it=item: self._on_item_resized(it, w, h))
+        item.move_committed.connect(lambda it, op, np: self._on_item_move_committed(it, op, np))
+        item.resize_committed.connect(lambda it, ow, oh, nw, nh: self._on_item_resize_committed(it, ow, oh, nw, nh))
 
-        self._scene.addItem(item)
-        self._chart_items.append(item)
-
-        self._scene.clearSelection()
-        item.setSelected(True)
-        self._mark_dirty()
+        self._undo_stack.push(AddItemCommand(self, item, item_type="chart"))
 
     def _on_add_badge(self) -> None:
         if self._is_locked:
@@ -451,13 +504,10 @@ class TemplateEditorView(QWidget):
 
         item.position_changed.connect(lambda x, y, it=item: self._on_item_moved(it, x, y))
         item.geometry_changed.connect(lambda w, h, it=item: self._on_item_resized(it, w, h))
+        item.move_committed.connect(lambda it, op, np: self._on_item_move_committed(it, op, np))
+        item.resize_committed.connect(lambda it, ow, oh, nw, nh: self._on_item_resize_committed(it, ow, oh, nw, nh))
 
-        self._scene.addItem(item)
-        self._badge_items.append(item)
-
-        self._scene.clearSelection()
-        item.setSelected(True)
-        self._mark_dirty()
+        self._undo_stack.push(AddItemCommand(self, item, item_type="badge"))
 
     def _on_label_changed(self, new_label: str) -> None:
         if not isinstance(self._selected_item, FieldItem):
@@ -468,9 +518,10 @@ class TemplateEditorView(QWidget):
             if f is not self._selected_item and f.label.lower() == clean.lower():
                 QMessageBox.warning(self, "Duplicate Field Name",
                                     f"A field with name '{clean}' already exists.")
+                self._panel.load_item(self._selected_item)
                 return
-        self._selected_item.set_label(clean or "Field")
-        self._mark_dirty()
+
+        self._change_property(self._selected_item, "label", clean or "Field")
 
     def _on_delete_selected(self) -> None:
         if self._is_locked:
@@ -482,17 +533,13 @@ class TemplateEditorView(QWidget):
             return
 
         item = self._selected_item
-        self._scene.removeItem(item)
-        if isinstance(item, ChartItem) and item in self._chart_items:
-            self._chart_items.remove(item)
-        elif isinstance(item, BadgeItem) and item in self._badge_items:
-            self._badge_items.remove(item)
-        elif isinstance(item, FieldItem) and item in self._field_items:
-            self._field_items.remove(item)
+        item_type = "field"
+        if isinstance(item, ChartItem):
+            item_type = "chart"
+        elif isinstance(item, BadgeItem):
+            item_type = "badge"
 
-        self._selected_item = None
-        self._panel.load_item(None)
-        self._mark_dirty()
+        self._undo_stack.push(DeleteItemCommand(self, item, item_type=item_type))
 
     def _on_upload_bg(self) -> None:
         if self._is_locked:
@@ -577,6 +624,7 @@ class TemplateEditorView(QWidget):
             with open(save_path, "w", encoding="utf-8") as f:
                 json.dump(state, f, indent=2)
             self._has_unsaved_changes = False
+            self._undo_stack.setClean()
             self._template_name = os.path.splitext(os.path.basename(save_path))[0]
             QMessageBox.information(self, "Saved", f"Template saved successfully:\n{save_path}")
             return True
@@ -656,6 +704,8 @@ class TemplateEditorView(QWidget):
             item.set_snap_to_grid(self._snap_to_grid, 10.0)
             item.position_changed.connect(lambda x, y, it=item: self._on_item_moved(it, x, y))
             item.geometry_changed.connect(lambda w, h, it=item: self._on_item_resized(it, w, h))
+            item.move_committed.connect(lambda it, op, np: self._on_item_move_committed(it, op, np))
+            item.resize_committed.connect(lambda it, ow, oh, nw, nh: self._on_item_resize_committed(it, ow, oh, nw, nh))
             self._scene.addItem(item)
             self._field_items.append(item)
 
@@ -665,6 +715,8 @@ class TemplateEditorView(QWidget):
             item.set_snap_to_grid(self._snap_to_grid, 10.0)
             item.position_changed.connect(lambda x, y, it=item: self._on_item_moved(it, x, y))
             item.geometry_changed.connect(lambda w, h, it=item: self._on_item_resized(it, w, h))
+            item.move_committed.connect(lambda it, op, np: self._on_item_move_committed(it, op, np))
+            item.resize_committed.connect(lambda it, ow, oh, nw, nh: self._on_item_resize_committed(it, ow, oh, nw, nh))
             self._scene.addItem(item)
             self._chart_items.append(item)
 
@@ -674,9 +726,12 @@ class TemplateEditorView(QWidget):
             item.set_snap_to_grid(self._snap_to_grid, 10.0)
             item.position_changed.connect(lambda x, y, it=item: self._on_item_moved(it, x, y))
             item.geometry_changed.connect(lambda w, h, it=item: self._on_item_resized(it, w, h))
+            item.move_committed.connect(lambda it, op, np: self._on_item_move_committed(it, op, np))
+            item.resize_committed.connect(lambda it, ow, oh, nw, nh: self._on_item_resize_committed(it, ow, oh, nw, nh))
             self._scene.addItem(item)
             self._badge_items.append(item)
 
+        self._undo_stack.clear()
         self._fit_to_view()
 
     # ── Helpers ───────────────────────────────────────────────────────────────
@@ -714,10 +769,14 @@ class TemplateEditorView(QWidget):
         min_x = min(it.pos().x() for it in items)
         if self._snap_to_grid:
             min_x = round(min_x / 10.0) * 10.0
+        moves = []
         for it in items:
-            it.setX(min_x)
-            self._on_item_moved(it, it.pos().x(), it.pos().y())
-        self._mark_dirty()
+            old_pos = it.pos()
+            new_pos = QPointF(min_x, old_pos.y())
+            if old_pos != new_pos:
+                moves.append((it, old_pos, new_pos))
+        if moves:
+            self._undo_stack.push(MoveMultipleItemsCommand(self, moves, text="Align Left"))
 
     def _on_align_center(self) -> None:
         items = self._selected_canvas_items()
@@ -726,26 +785,34 @@ class TemplateEditorView(QWidget):
         min_left = min(it.pos().x() for it in items)
         max_right = max(it.pos().x() + it.width for it in items)
         mid_x = (min_left + max_right) / 2.0
+        moves = []
         for it in items:
             target_x = mid_x - (it.width / 2.0)
             if self._snap_to_grid:
                 target_x = round(target_x / 10.0) * 10.0
-            it.setX(target_x)
-            self._on_item_moved(it, it.pos().x(), it.pos().y())
-        self._mark_dirty()
+            old_pos = it.pos()
+            new_pos = QPointF(target_x, old_pos.y())
+            if old_pos != new_pos:
+                moves.append((it, old_pos, new_pos))
+        if moves:
+            self._undo_stack.push(MoveMultipleItemsCommand(self, moves, text="Align Center"))
 
     def _on_align_right(self) -> None:
         items = self._selected_canvas_items()
         if len(items) < 2:
             return
         max_right = max(it.pos().x() + it.width for it in items)
+        moves = []
         for it in items:
             target_x = max_right - it.width
             if self._snap_to_grid:
                 target_x = round(target_x / 10.0) * 10.0
-            it.setX(target_x)
-            self._on_item_moved(it, it.pos().x(), it.pos().y())
-        self._mark_dirty()
+            old_pos = it.pos()
+            new_pos = QPointF(target_x, old_pos.y())
+            if old_pos != new_pos:
+                moves.append((it, old_pos, new_pos))
+        if moves:
+            self._undo_stack.push(MoveMultipleItemsCommand(self, moves, text="Align Right"))
 
     def _on_distribute_vertically(self) -> None:
         items = self._selected_canvas_items()
@@ -758,6 +825,7 @@ class TemplateEditorView(QWidget):
         total_span = bottom_edge - top_y
         total_gap = total_span - total_items_height
 
+        moves = []
         if total_gap > 0:
             gap = total_gap / (len(sorted_items) - 1)
             curr_y = top_y
@@ -765,8 +833,10 @@ class TemplateEditorView(QWidget):
                 target_y = curr_y
                 if self._snap_to_grid:
                     target_y = round(target_y / 10.0) * 10.0
-                it.setY(target_y)
-                self._on_item_moved(it, it.pos().x(), it.pos().y())
+                old_pos = it.pos()
+                new_pos = QPointF(old_pos.x(), target_y)
+                if old_pos != new_pos:
+                    moves.append((it, old_pos, new_pos))
                 curr_y += it.height + gap
         else:
             step = (sorted_items[-1].pos().y() - top_y) / (len(sorted_items) - 1)
@@ -774,9 +844,12 @@ class TemplateEditorView(QWidget):
                 target_y = top_y + idx * step
                 if self._snap_to_grid:
                     target_y = round(target_y / 10.0) * 10.0
-                it.setY(target_y)
-                self._on_item_moved(it, it.pos().x(), it.pos().y())
-        self._mark_dirty()
+                old_pos = it.pos()
+                new_pos = QPointF(old_pos.x(), target_y)
+                if old_pos != new_pos:
+                    moves.append((it, old_pos, new_pos))
+        if moves:
+            self._undo_stack.push(MoveMultipleItemsCommand(self, moves, text="Distribute Vertically"))
 
     def _on_item_moved(self, item: FieldItem | ChartItem | BadgeItem, x: float, y: float) -> None:
         if item is self._selected_item:
@@ -790,23 +863,31 @@ class TemplateEditorView(QWidget):
 
     def _on_panel_x(self, x: float) -> None:
         if self._selected_item:
-            self._selected_item.setX(x)
-            self._mark_dirty()
+            old_pos = self._selected_item.pos()
+            new_pos = QPointF(x, old_pos.y())
+            if old_pos != new_pos:
+                self._undo_stack.push(MoveItemCommand(self, self._selected_item, old_pos, new_pos))
 
     def _on_panel_y(self, y: float) -> None:
         if self._selected_item:
-            self._selected_item.setY(y)
-            self._mark_dirty()
+            old_pos = self._selected_item.pos()
+            new_pos = QPointF(old_pos.x(), y)
+            if old_pos != new_pos:
+                self._undo_stack.push(MoveItemCommand(self, self._selected_item, old_pos, new_pos))
 
     def _on_panel_width(self, w: float) -> None:
         if self._selected_item:
-            self._selected_item.set_field_size(w, self._selected_item.height)
-            self._mark_dirty()
+            old_w = self._selected_item.width
+            old_h = self._selected_item.height
+            if old_w != w:
+                self._undo_stack.push(ResizeItemCommand(self, self._selected_item, (old_w, old_h), (w, old_h)))
 
     def _on_panel_height(self, h: float) -> None:
         if self._selected_item:
-            self._selected_item.set_field_size(self._selected_item.width, h)
-            self._mark_dirty()
+            old_w = self._selected_item.width
+            old_h = self._selected_item.height
+            if old_h != h:
+                self._undo_stack.push(ResizeItemCommand(self, self._selected_item, (old_w, old_h), (old_w, h)))
 
     def _apply_to_field(self, fn) -> None:
         """Apply fn only when selected item is a FieldItem."""
