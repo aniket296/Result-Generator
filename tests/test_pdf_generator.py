@@ -797,5 +797,59 @@ class TestFormatFilenameFromPattern(unittest.TestCase):
             shutil.rmtree(tmp)
 
 
+class TestZipPackaging(unittest.TestCase):
+    def test_package_output_to_zip_creates_valid_archive(self):
+        import zipfile
+        from generation.pdf_generator import package_output_to_zip
+        tmp = tempfile.mkdtemp()
+        try:
+            out_folder = os.path.join(tmp, "Class10_Results")
+            os.makedirs(out_folder, exist_ok=True)
+            bundle_dir = os.path.join(out_folder, "Print_Bundles")
+            os.makedirs(bundle_dir, exist_ok=True)
+
+            with open(os.path.join(out_folder, "101_ALICE.PDF"), "w") as f:
+                f.write("Alice PDF content")
+            with open(os.path.join(out_folder, "102_BOB.PDF"), "w") as f:
+                f.write("Bob PDF content")
+            with open(os.path.join(bundle_dir, "Class_10A_Master_Print.pdf"), "w") as f:
+                f.write("Bundle content")
+
+            zip_path = package_output_to_zip(out_folder)
+            self.assertTrue(os.path.exists(zip_path))
+            self.assertTrue(zip_path.endswith(".zip"))
+
+            # Verify contents of zip
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                namelist = zf.namelist()
+                self.assertIn("101_ALICE.PDF", namelist)
+                self.assertIn("102_BOB.PDF", namelist)
+                self.assertTrue(any("Class_10A_Master_Print.pdf" in name for name in namelist))
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_package_output_to_zip_progress_callback(self):
+        from generation.pdf_generator import package_output_to_zip
+        tmp = tempfile.mkdtemp()
+        try:
+            out_folder = os.path.join(tmp, "Results")
+            os.makedirs(out_folder, exist_ok=True)
+            for i in range(3):
+                with open(os.path.join(out_folder, f"result_{i}.pdf"), "w") as f:
+                    f.write(f"content {i}")
+
+            calls = []
+            def on_prog(cur, tot, fn):
+                calls.append((cur, tot, fn))
+
+            zip_path = package_output_to_zip(out_folder, progress_callback=on_prog)
+            self.assertEqual(len(calls), 3)
+            self.assertEqual(calls[-1][0], 3)
+            self.assertEqual(calls[-1][1], 3)
+            self.assertTrue(os.path.exists(zip_path))
+        finally:
+            shutil.rmtree(tmp)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

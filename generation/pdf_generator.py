@@ -16,6 +16,7 @@ Features:
 """
 from __future__ import annotations
 
+import datetime
 import io
 import json
 import math
@@ -23,6 +24,7 @@ import os
 import re
 import shutil
 import uuid
+import zipfile
 from typing import Any, Callable
 
 from PyQt6.QtCore import QMutex, QObject, QThread, QWaitCondition, pyqtSignal
@@ -794,6 +796,56 @@ def create_class_print_bundles(
     return created_bundles
 
 
+# ── Automated ZIP Packaging ──────────────────────────────────────────────────
+
+def package_output_to_zip(
+    output_dir: str,
+    zip_path: str = "",
+    progress_callback: Callable[[int, int, str], None] | None = None,
+) -> str:
+    """
+    Compresses all generated files and subdirectories in output_dir into a single .zip archive.
+    If zip_path is empty, creates [output_dir_name].zip alongside or within the output destination.
+    Returns the absolute path to the created zip file.
+    """
+    if not os.path.exists(output_dir):
+        raise FileNotFoundError(f"Output directory does not exist: {output_dir}")
+
+    if not zip_path:
+        base_name = os.path.basename(os.path.normpath(output_dir))
+        parent_dir = os.path.dirname(os.path.normpath(output_dir))
+        if base_name.lower() in ("desktop", "documents", "downloads", ""):
+            ts = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+            zip_path = os.path.join(output_dir, f"Results_Archive_{ts}.zip")
+        elif parent_dir and os.path.exists(parent_dir):
+            zip_path = os.path.join(parent_dir, f"{base_name}.zip")
+        else:
+            zip_path = os.path.join(output_dir, f"{base_name}.zip")
+
+    # Collect all files to compress
+    all_files: list[tuple[str, str]] = []  # (abs_path, arcname)
+    for root, _, files in os.walk(output_dir):
+        for f in files:
+            abs_p = os.path.join(root, f)
+            # Avoid re-compressing the zip file if inside output_dir
+            if os.path.abspath(abs_p) == os.path.abspath(zip_path):
+                continue
+            # Avoid recovery temporary files
+            if f.startswith(".write_test_") or f.endswith(".recovery.json") or f.startswith("recovery_"):
+                continue
+            rel_p = os.path.relpath(abs_p, output_dir)
+            all_files.append((abs_p, rel_p))
+
+    total = len(all_files)
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for i, (abs_p, rel_p) in enumerate(all_files, start=1):
+            zf.write(abs_p, arcname=rel_p)
+            if progress_callback:
+                progress_callback(i, total, os.path.basename(abs_p))
+
+    return zip_path
+
+
 # ── Generator Worker (QThread) ───────────────────────────────────────────────
 
 class GeneratorWorker(QThread):
@@ -826,6 +878,7 @@ class GeneratorWorker(QThread):
         bundle_enabled: bool = False,
         bundle_col: str = "",
         filename_pattern: str = "",
+        zip_package: bool = False,
     ) -> None:
         super().__init__(parent)
         self.template_state = template_state
@@ -837,6 +890,7 @@ class GeneratorWorker(QThread):
         self.bundle_enabled = bundle_enabled
         self.bundle_col = bundle_col
         self.filename_pattern = filename_pattern
+        self.zip_package = zip_package
 
         self._cancelled = False
         self._mutex = QMutex()
@@ -847,6 +901,7 @@ class GeneratorWorker(QThread):
         self.generated_files: list[str] = []
         self.successful_records: list[tuple[dict[str, str], str]] = []
         self.created_bundles: list[str] = []
+        self.created_zip_path: str = ""
         self.failed_records: list[dict[str, Any]] = []
 
         self.recovery_file = os.path.join(
@@ -1019,7 +1074,7 @@ class GeneratorWorker(QThread):
         # ── Post-Processing: Smart Class-Wise Print Bundling ──────────────────
         if self.bundle_enabled and self.bundle_col and self.successful_records and not self._cancelled:
             self.progress.emit(
-                total, total, 99, "Print_Bundles", "Creating Class-Wise Print Bundles..."
+                total, total, 98, "Print_Bundles", "Creating Class-Wise Print Bundles..."
             )
             try:
                 self.created_bundles = create_class_print_bundles(
@@ -1027,6 +1082,25 @@ class GeneratorWorker(QThread):
                 )
             except Exception as bundle_err:
                 print(f"[DEBUG BUNDLE] Bundling process error: {bundle_err}")
+
+        # ── Post-Processing: Automated ZIP Packaging ────────────────────────
+        if self.zip_package and self.generated_files and not self._cancelled:
+            self.progress.emit(
+                total, total, 99, "ZIP Packager", "Packaging output into ZIP archive..."
+            )
+            try:
+                def _on_zip_prog(cur_f: int, tot_f: int, fn: str) -> None:
+                    pct = 95 + int((cur_f / max(1, tot_f)) * 4)
+                    self.progress.emit(
+                        cur_f, tot_f, min(99, pct), fn, f"Archiving {cur_f}/{tot_f} files into ZIP..."
+                    )
+
+                self.created_zip_path = package_output_to_zip(
+                    self.output_dir, progress_callback=_on_zip_prog
+                )
+                print(f"[DEBUG ZIP] Created ZIP archive: '{self.created_zip_path}'")
+            except Exception as zip_err:
+                print(f"[DEBUG ZIP] ZIP packaging error: {zip_err}")
 
         # Successful completion -> remove recovery file
         if os.path.exists(self.recovery_file):

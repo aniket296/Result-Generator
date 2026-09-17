@@ -66,6 +66,7 @@ class GenerationSetupDialog(QDialog):
         init_bundle_enabled: bool = False,
         init_bundle_col: str = "",
         init_naming_pattern: str = DEFAULT_NAMING_PATTERN,
+        init_zip_package: bool = False,
     ) -> None:
         super().__init__(parent)
         self.template_name = template_name or "Result"
@@ -74,13 +75,14 @@ class GenerationSetupDialog(QDialog):
         self.init_bundle_enabled = init_bundle_enabled
         self.init_bundle_col = init_bundle_col
         self.init_naming_pattern = init_naming_pattern or DEFAULT_NAMING_PATTERN
+        self.init_zip_package = init_zip_package
 
         self.selected_dir: str = os.path.join(os.path.expanduser("~"), "Desktop")
         self.unique_column: str = ""
         self.name_column: str = ""
 
         self.setWindowTitle("Result Generation Setup")
-        self.setFixedSize(620, 670)
+        self.setFixedSize(620, 680)
         self.setModal(True)
         self._build_ui()
         self._update_preview()
@@ -96,6 +98,10 @@ class GenerationSetupDialog(QDialog):
     @property
     def naming_pattern(self) -> str:
         return self._pattern_edit.text().strip() if hasattr(self, "_pattern_edit") else self.init_naming_pattern
+
+    @property
+    def zip_package(self) -> bool:
+        return self._zip_cb.isChecked() if hasattr(self, "_zip_cb") else False
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -213,8 +219,8 @@ class GenerationSetupDialog(QDialog):
 
         layout.addWidget(cols_box)
 
-        # Print Bundling Options Box
-        bundle_box = QGroupBox("Print Bundling Options")
+        # Packaging & Print Bundling Options Box
+        bundle_box = QGroupBox("Packaging & Print Bundling Options")
         bundle_box.setStyleSheet("""
             QGroupBox {
                 font-size: 12px; font-weight: 600; color: #374151;
@@ -222,8 +228,12 @@ class GenerationSetupDialog(QDialog):
                 margin-top: 4px; padding: 8px 10px;
             }
         """)
-        b_layout = QHBoxLayout(bundle_box)
+        b_layout = QVBoxLayout(bundle_box)
         b_layout.setSpacing(8)
+
+        # Print Bundling Row
+        b_row = QHBoxLayout()
+        b_row.setSpacing(8)
 
         self._bundle_cb = QCheckBox("Generate Class-Wise Print Bundles")
         self._bundle_cb.setChecked(self.init_bundle_enabled)
@@ -249,13 +259,21 @@ class GenerationSetupDialog(QDialog):
                     self._bundle_combo.setCurrentIndex(idx)
                     break
 
-        b_layout.addWidget(self._bundle_cb)
-        b_layout.addSpacing(10)
-        b_layout.addWidget(self._bundle_col_lbl)
-        b_layout.addWidget(self._bundle_combo, stretch=1)
+        b_row.addWidget(self._bundle_cb)
+        b_row.addSpacing(10)
+        b_row.addWidget(self._bundle_col_lbl)
+        b_row.addWidget(self._bundle_combo, stretch=1)
 
         self._bundle_col_lbl.setVisible(self.init_bundle_enabled)
         self._bundle_combo.setVisible(self.init_bundle_enabled)
+
+        b_layout.addLayout(b_row)
+
+        # ZIP Package Row
+        self._zip_cb = QCheckBox("Package all output results into a single ZIP archive (.zip)")
+        self._zip_cb.setChecked(self.init_zip_package)
+        self._zip_cb.setStyleSheet("font-size: 11px; color: #4f46e5; font-weight: 600;")
+        b_layout.addWidget(self._zip_cb)
 
         layout.addWidget(bundle_box)
 
@@ -503,7 +521,8 @@ class GenerationProgressDialog(QDialog):
         self.failed_count = fail
         self.output_directory = out_dir
         self.failed_records = failed_records
-        self.created_bundles = list(self.worker.created_bundles)
+        self.created_bundles = list(getattr(self.worker, "created_bundles", []))
+        self.created_zip_path = str(getattr(self.worker, "created_zip_path", ""))
         self.accept()
 
 
@@ -524,6 +543,7 @@ class GenerationCompletedDialog(QDialog):
         template_state: dict[str, Any],
         parent=None,
         created_bundles: list[str] | None = None,
+        created_zip: str = "",
     ) -> None:
         super().__init__(parent)
         self.generated = generated
@@ -533,9 +553,10 @@ class GenerationCompletedDialog(QDialog):
         self.failed_records = failed_records
         self.template_state = template_state
         self.created_bundles = created_bundles or []
+        self.created_zip = created_zip
 
         self.setWindowTitle("Generation Summary")
-        self.setFixedSize(540, 420)
+        self.setFixedSize(540, 440)
         self.setModal(True)
         self._build_ui()
 
@@ -572,6 +593,15 @@ class GenerationCompletedDialog(QDialog):
             c_layout.addWidget(_make_lbl(
                 f"✨ <i>Individual PDFs generated, plus {len(self.created_bundles)} class print bundles created.</i>",
                 "font-size: 12px; color: #059669; font-weight: 600; padding: 2px 0;",
+            ))
+        if self.created_zip:
+            c_layout.addWidget(_make_lbl(
+                f"• <b>ZIP Package:</b> <span style='color: #4f46e5; font-weight: 600;'>{os.path.basename(self.created_zip)}</span>",
+                _lbl_style,
+            ))
+            c_layout.addWidget(_make_lbl(
+                f"📦 <i>Output results compressed into ZIP archive: {self.created_zip}</i>",
+                "font-size: 12px; color: #4f46e5; font-weight: 600; padding: 2px 0;",
             ))
         c_layout.addWidget(_make_lbl(f"• <b>Skipped Records:</b> {self.skipped}", _lbl_style))
         c_layout.addWidget(_make_lbl(f"• <b>Failed Records:</b> {self.failed}", _lbl_style))

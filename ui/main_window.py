@@ -270,6 +270,7 @@ class MainWindow(QMainWindow):
 
         dash_bundle_enabled, dash_bundle_col = self._dashboard_view.get_bundle_options()
         dash_naming_pattern = self._dashboard_view.get_naming_pattern()
+        dash_zip_enabled = self._dashboard_view.get_zip_package_option()
 
         # 1. Setup Dialog
         setup_dlg = GenerationSetupDialog(
@@ -280,6 +281,7 @@ class MainWindow(QMainWindow):
             init_bundle_enabled=dash_bundle_enabled,
             init_bundle_col=dash_bundle_col,
             init_naming_pattern=dash_naming_pattern,
+            init_zip_package=dash_zip_enabled,
         )
         if setup_dlg.exec() != GenerationSetupDialog.DialogCode.Accepted:
             return
@@ -290,6 +292,7 @@ class MainWindow(QMainWindow):
         bundle_enabled = setup_dlg.bundle_enabled
         bundle_col = setup_dlg.bundle_column
         naming_pattern = setup_dlg.naming_pattern
+        zip_package = setup_dlg.zip_package
 
         # 2. Pre-Flight Data Sanitizer & Audit Check
         mapped_columns: list[str] = []
@@ -334,6 +337,7 @@ class MainWindow(QMainWindow):
             bundle_enabled=bundle_enabled,
             bundle_col=bundle_col,
             filename_pattern=naming_pattern,
+            zip_package=zip_package,
         )
 
         prog_dlg = GenerationProgressDialog(worker, len(rows_to_generate), self)
@@ -350,6 +354,7 @@ class MainWindow(QMainWindow):
                 template_state=template_state,
                 parent=self,
                 created_bundles=prog_dlg.created_bundles,
+                created_zip=prog_dlg.created_zip_path,
             )
             comp_dlg.exec()
 

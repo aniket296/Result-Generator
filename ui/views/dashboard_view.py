@@ -261,7 +261,7 @@ class DashboardView(QWidget):
         pattern_row.addWidget(pattern_hint)
         options_layout.addLayout(pattern_row)
 
-        # Print Bundling Row
+        # Print Bundling & ZIP Row
         bundle_layout = QHBoxLayout()
         bundle_layout.setSpacing(12)
 
@@ -280,11 +280,15 @@ class DashboardView(QWidget):
             }
         """)
 
+        self._zip_cb = QCheckBox("Package output into ZIP archive (.zip)")
+        self._zip_cb.setStyleSheet("font-size: 12px; font-weight: 600; color: #4f46e5;")
+
         bundle_layout.addWidget(self._bundle_cb)
         bundle_layout.addSpacing(16)
         bundle_layout.addWidget(self._bundle_col_lbl)
         bundle_layout.addWidget(self._bundle_col_combo)
         bundle_layout.addStretch()
+        bundle_layout.addWidget(self._zip_cb)
 
         self._bundle_col_lbl.hide()
         self._bundle_col_combo.hide()
@@ -516,6 +520,9 @@ class DashboardView(QWidget):
 
     def get_bundle_options(self) -> tuple[bool, str]:
         return self._bundle_cb.isChecked(), self._bundle_col_combo.currentText()
+
+    def get_zip_package_option(self) -> bool:
+        return self._zip_cb.isChecked() if hasattr(self, "_zip_cb") else False
 
     def get_naming_pattern(self) -> str:
         if hasattr(self, "_pattern_input"):
