@@ -43,33 +43,36 @@ def print_single_student_record(
         generate_single_pdf(template_state, row_data, temp_pdf)
 
         doc = pymupdf.open(temp_pdf)
-        if len(doc) == 0:
-            return False
+        try:
+            if len(doc) == 0:
+                return False
 
-        page = doc[0]
-        pix = page.get_pixmap(dpi=300)
-        img = QImage(
-            pix.samples,
-            pix.width,
-            pix.height,
-            pix.stride,
-            QImage.Format.Format_RGB888 if pix.n == 3 else QImage.Format.Format_RGBA8888,
-        )
+            page = doc[0]
+            pix = page.get_pixmap(dpi=300)
+            img = QImage(
+                pix.samples,
+                pix.width,
+                pix.height,
+                pix.stride,
+                QImage.Format.Format_RGB888 if pix.n == 3 else QImage.Format.Format_RGBA8888,
+            )
 
-        painter = QPainter(printer)
-        rect = printer.pageRect(QPrinter.Unit.DevicePixel)
-        scaled_img = img.scaled(
-            int(rect.width()),
-            int(rect.height()),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        x = (rect.width() - scaled_img.width()) / 2
-        y = (rect.height() - scaled_img.height()) / 2
-        painter.drawImage(int(x), int(y), scaled_img)
-        painter.end()
-
-        doc.close()
+            painter = QPainter(printer)
+            try:
+                rect = printer.pageRect(QPrinter.Unit.DevicePixel)
+                scaled_img = img.scaled(
+                    int(rect.width()),
+                    int(rect.height()),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                x = (rect.width() - scaled_img.width()) / 2
+                y = (rect.height() - scaled_img.height()) / 2
+                painter.drawImage(int(x), int(y), scaled_img)
+            finally:
+                painter.end()
+        finally:
+            doc.close()
         return True
     except Exception as exc:
         if parent_widget:
@@ -119,29 +122,31 @@ def print_all_student_records(
             try:
                 generate_single_pdf(template_state, row, temp_pdf)
                 doc = pymupdf.open(temp_pdf)
-                if len(doc) > 0:
-                    if idx > 0:
-                        printer.newPage()
-                    page = doc[0]
-                    pix = page.get_pixmap(dpi=300)
-                    img = QImage(
-                        pix.samples,
-                        pix.width,
-                        pix.height,
-                        pix.stride,
-                        QImage.Format.Format_RGB888 if pix.n == 3 else QImage.Format.Format_RGBA8888,
-                    )
-                    scaled = img.scaled(
-                        int(rect.width()),
-                        int(rect.height()),
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation,
-                    )
-                    x = (rect.width() - scaled.width()) / 2
-                    y = (rect.height() - scaled.height()) / 2
-                    painter.drawImage(int(x), int(y), scaled)
-                    printed += 1
-                doc.close()
+                try:
+                    if len(doc) > 0:
+                        if idx > 0:
+                            printer.newPage()
+                        page = doc[0]
+                        pix = page.get_pixmap(dpi=300)
+                        img = QImage(
+                            pix.samples,
+                            pix.width,
+                            pix.height,
+                            pix.stride,
+                            QImage.Format.Format_RGB888 if pix.n == 3 else QImage.Format.Format_RGBA8888,
+                        )
+                        scaled = img.scaled(
+                            int(rect.width()),
+                            int(rect.height()),
+                            Qt.AspectRatioMode.KeepAspectRatio,
+                            Qt.TransformationMode.SmoothTransformation,
+                        )
+                        x = (rect.width() - scaled.width()) / 2
+                        y = (rect.height() - scaled.height()) / 2
+                        painter.drawImage(int(x), int(y), scaled)
+                        printed += 1
+                finally:
+                    doc.close()
             except Exception:
                 failed += 1
             finally:

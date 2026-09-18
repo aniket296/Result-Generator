@@ -457,10 +457,13 @@ def _render_chart_to_image(
 
     # ── Save to bytes and close ───────────────────────────────────────────
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight", transparent=True)
-    plt.close("all")
-    buf.seek(0)
-    return buf.getvalue()
+    try:
+        fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight", transparent=True)
+        buf.seek(0)
+        return buf.getvalue()
+    finally:
+        plt.close("all")
+        buf.close()
 
 
 # ── Badge Rule Evaluator ──────────────────────────────────────────────────────
@@ -554,8 +557,10 @@ def generate_single_pdf(
     if bg_path and os.path.exists(bg_path):
         if bg_type == "pdf":
             src_doc = pymupdf.open(bg_path)
-            doc.insert_pdf(src_doc, from_page=0, to_page=0)
-            src_doc.close()
+            try:
+                doc.insert_pdf(src_doc, from_page=0, to_page=0)
+            finally:
+                src_doc.close()
             page = doc[0]
         else:
             # High-res image background
@@ -746,6 +751,9 @@ def generate_single_pdf(
             f"Could not write PDF '{output_path}'. "
             "The file may be open in another application or the destination is not writable."
         ) from exc
+    except Exception:
+        doc.close()
+        raise
     else:
         doc.close()
 
@@ -788,12 +796,15 @@ def create_class_print_bundles(
         master_doc = pymupdf.open()
         try:
             for pdf_path in pdf_files:
+                student_doc = None
                 try:
                     student_doc = pymupdf.open(pdf_path)
                     master_doc.insert_pdf(student_doc)
-                    student_doc.close()
                 except Exception as merge_err:
                     print(f"[DEBUG BUNDLE] Failed to merge {pdf_path} into {class_name}: {merge_err}")
+                finally:
+                    if student_doc is not None:
+                        student_doc.close()
 
             if master_doc.page_count > 0:
                 safe_class = sanitize_filename_part(class_name)
