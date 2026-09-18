@@ -28,8 +28,11 @@ from PyQt6.QtWidgets import (
     QGraphicsView,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QMessageBox,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -151,13 +154,44 @@ class TemplateEditorView(QWidget):
         self.addAction(redo_action)
 
     def _build_toolbar(self) -> QWidget:
-        bar = QWidget()
-        bar.setFixedHeight(54)
-        bar.setStyleSheet("background: #f9fafb;")
+        # Wrap toolbar in a clean horizontal QScrollArea to prevent button text cropping on narrow screens
+        scroll = QScrollArea()
+        scroll.setFixedHeight(54)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("""
+            QScrollArea {
+                background: #f9fafb;
+                border: none;
+            }
+            QScrollBar:horizontal {
+                height: 4px;
+                background: #f3f4f6;
+                border-radius: 2px;
+            }
+            QScrollBar::handle:horizontal {
+                background: #d1d5db;
+                border-radius: 2px;
+                min-width: 20px;
+            }
+            QScrollBar::handle:horizontal:hover {
+                background: #9ca3af;
+            }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                width: 0px;
+                background: none;
+            }
+        """)
 
-        row = QHBoxLayout(bar)
+        container = QWidget()
+        container.setStyleSheet("background: #f9fafb;")
+
+        row = QHBoxLayout(container)
         row.setContentsMargins(16, 0, 16, 0)
         row.setSpacing(8)
+        row.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
         title = QLabel("Template Editor")
         title.setStyleSheet("font-size: 16px; font-weight: 700; color: #1a1a2e;")
@@ -180,6 +214,7 @@ class TemplateEditorView(QWidget):
         self._add_chart_btn   = self._tool_btn("📊  Add Chart",               self._on_add_chart)
         self._add_badge_btn   = self._tool_btn("🎖  Add Badge",               self._on_add_badge)
         self._snap_btn        = QPushButton("🧲  Snap to Grid")
+        self._snap_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         self._snap_btn.setCheckable(True)
         self._snap_btn.setChecked(True)
         self._snap_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -219,21 +254,27 @@ class TemplateEditorView(QWidget):
         self._load_btn        = self._tool_btn("📂  Open Template",           self._on_load_template)
 
         # Style the Add Chart button distinctively
+        self._add_chart_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         self._add_chart_btn.setStyleSheet("""
             QPushButton {
                 background: #eff6ff; color: #1d4ed8; border: 1px solid #93c5fd;
-                border-radius: 4px; padding: 6px 12px; font-size: 12px; font-weight: 600;
+                border-radius: 4px; padding: 5px 12px; font-size: 12px; font-weight: 600;
+                min-height: 20px;
             }
             QPushButton:hover { background: #dbeafe; }
+            QPushButton:disabled { background: #f9fafb; color: #9ca3af; border-color: #e5e7eb; }
         """)
 
         # Style the Add Badge button distinctively
+        self._add_badge_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         self._add_badge_btn.setStyleSheet("""
             QPushButton {
                 background: #fffbeb; color: #b45309; border: 1px solid #fde68a;
-                border-radius: 4px; padding: 6px 12px; font-size: 12px; font-weight: 600;
+                border-radius: 4px; padding: 5px 12px; font-size: 12px; font-weight: 600;
+                min-height: 20px;
             }
             QPushButton:hover { background: #fef3c7; }
+            QPushButton:disabled { background: #f9fafb; color: #9ca3af; border-color: #e5e7eb; }
         """)
 
         row.addWidget(self._bg_btn)
@@ -262,7 +303,8 @@ class TemplateEditorView(QWidget):
         row.addWidget(zoom_in)
         row.addWidget(zoom_fit)
 
-        return bar
+        scroll.setWidget(container)
+        return scroll
 
     def _connect_panel_signals(self) -> None:
         p = self._panel
@@ -369,7 +411,8 @@ class TemplateEditorView(QWidget):
                 self._snap_btn.setStyleSheet("""
                     QPushButton {
                         background: #dbeafe; color: #1e40af; border: 1px solid #3b82f6;
-                        border-radius: 4px; padding: 6px 12px; font-size: 12px; font-weight: 600;
+                        border-radius: 4px; padding: 5px 12px; font-size: 12px; font-weight: 600;
+                        min-height: 20px;
                     }
                     QPushButton:hover { background: #bfdbfe; }
                 """)
@@ -377,7 +420,8 @@ class TemplateEditorView(QWidget):
                 self._snap_btn.setStyleSheet("""
                     QPushButton {
                         background: #f3f4f6; color: #6b7280; border: 1px solid #d1d5db;
-                        border-radius: 4px; padding: 6px 12px; font-size: 12px; font-weight: 600;
+                        border-radius: 4px; padding: 5px 12px; font-size: 12px; font-weight: 600;
+                        min-height: 20px;
                     }
                     QPushButton:hover { background: #e5e7eb; color: #374151; }
                 """)
@@ -911,11 +955,13 @@ class TemplateEditorView(QWidget):
 
     def _tool_btn(self, text: str, slot) -> QPushButton:
         btn = QPushButton(text)
+        btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setStyleSheet("""
             QPushButton {
                 background: #ffffff; color: #374151; border: 1px solid #d1d5db;
-                border-radius: 4px; padding: 6px 12px; font-size: 12px; font-weight: 600;
+                border-radius: 4px; padding: 5px 12px; font-size: 12px; font-weight: 600;
+                min-height: 20px;
             }
             QPushButton:hover { background: #f3f4f6; color: #111827; }
             QPushButton:disabled { background: #f9fafb; color: #9ca3af; border-color: #e5e7eb; }
