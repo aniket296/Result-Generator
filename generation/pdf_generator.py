@@ -57,6 +57,7 @@ def sanitize_filename_part(text: str) -> str:
     Sanitize a filename component:
     - Replace Windows-invalid characters with '_'
     - Collapse consecutive underscores to a single '_'
+    - Remove path traversal dot segments
     - Strip leading/trailing underscores, spaces, and periods
     """
     if not text:
@@ -64,6 +65,8 @@ def sanitize_filename_part(text: str) -> str:
 
     # Replace invalid chars: \ / : * ? " < > | and non-printables
     cleaned = re.sub(r'[\\/:*?"<>|\x00-\x1f]', '_', str(text))
+    # A filename component must never contain a parent-directory segment.
+    cleaned = re.sub(r'\.{2,}', '_', cleaned)
     # Collapse multiple underscores/spaces
     cleaned = re.sub(r'[\s_]+', '_', cleaned)
     cleaned = cleaned.strip(" ._")
@@ -735,8 +738,16 @@ def generate_single_pdf(
         "producer": "TeacherResultSoftware Desktop Engine",
     })
 
-    doc.save(output_path, garbage=4, deflate=True)
-    doc.close()
+    try:
+        doc.save(output_path, garbage=4, deflate=True)
+    except PermissionError as exc:
+        doc.close()
+        raise PermissionError(
+            f"Could not write PDF '{output_path}'. "
+            "The file may be open in another application or the destination is not writable."
+        ) from exc
+    else:
+        doc.close()
 
 
 # ── Smart Class-Wise Print Bundling ──────────────────────────────────────────
@@ -745,6 +756,7 @@ def create_class_print_bundles(
     output_dir: str,
     student_mappings: list[tuple[dict[str, str], str]],
     group_col: str,
+    errors: list[dict[str, Any]] | None = None,
 ) -> list[str]:
     """
     Groups generated individual student PDFs by class/section and merges them
@@ -787,9 +799,25 @@ def create_class_print_bundles(
                 safe_class = sanitize_filename_part(class_name)
                 bundle_filename = f"Class_{safe_class}_Master_Print.pdf"
                 bundle_path = os.path.join(bundle_dir, bundle_filename)
-                master_doc.save(bundle_path, garbage=4, deflate=True)
-                created_bundles.append(bundle_path)
-                print(f"[DEBUG BUNDLE] Created bundle: '{bundle_path}' ({master_doc.page_count} pages)")
+                try:
+                    master_doc.save(bundle_path, garbage=4, deflate=True)
+                except PermissionError as exc:
+                    error_message = (
+                        f"Could not write class print bundle '{bundle_path}'. "
+                        "The file may be open in another application or the destination is not writable."
+                    )
+                    if errors is not None:
+                        errors.append({
+                            "student_name": class_name,
+                            "unique_val": "",
+                            "error": error_message,
+                            "row_data": {},
+                            "row_index": -1,
+                        })
+                    print(f"[DEBUG BUNDLE] {error_message}")
+                else:
+                    created_bundles.append(bundle_path)
+                    print(f"[DEBUG BUNDLE] Created bundle: '{bundle_path}' ({master_doc.page_count} pages)")
         finally:
             master_doc.close()
 
@@ -837,11 +865,17 @@ def package_output_to_zip(
             all_files.append((abs_p, rel_p))
 
     total = len(all_files)
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for i, (abs_p, rel_p) in enumerate(all_files, start=1):
-            zf.write(abs_p, arcname=rel_p)
-            if progress_callback:
-                progress_callback(i, total, os.path.basename(abs_p))
+    try:
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for i, (abs_p, rel_p) in enumerate(all_files, start=1):
+                zf.write(abs_p, arcname=rel_p)
+                if progress_callback:
+                    progress_callback(i, total, os.path.basename(abs_p))
+    except PermissionError as exc:
+        raise PermissionError(
+            f"Could not create ZIP archive '{zip_path}'. "
+            "The file may be open in another application or the destination is not writable."
+        ) from exc
 
     return zip_path
 
@@ -1205,6 +1239,18 @@ class GeneratorWorker(QThread):
                 generated_count += 1
                 self.record_succeeded.emit(row_num, out_file)
                 idx += 1
+            except PermissionError as exc:
+                error_message = str(exc)
+                self.failed_records.append({
+                    "student_name": row.get(self.name_col, "Unknown"),
+                    "unique_val": row.get(self.unique_col, f"Row {row_num}"),
+                    "error": error_message,
+                    "row_data": row,
+                    "row_index": idx,
+                })
+                skipped_count += 1
+                self.record_skipped.emit(row_num, error_message)
+                idx += 1
             except Exception as exc:
                 self._mutex.lock()
                 self.error_occurred.emit(row_num, f"Render Error: {exc}", row, retries_left)
@@ -1248,7 +1294,10 @@ class GeneratorWorker(QThread):
             )
             try:
                 self.created_bundles = create_class_print_bundles(
-                    self.output_dir, self.successful_records, self.bundle_col
+                    self.output_dir,
+                    self.successful_records,
+                    self.bundle_col,
+                    errors=self.failed_records,
                 )
             except Exception as bundle_err:
                 print(f"[DEBUG BUNDLE] Bundling process error: {bundle_err}")
@@ -1269,6 +1318,15 @@ class GeneratorWorker(QThread):
                     self.output_dir, progress_callback=_on_zip_prog
                 )
                 print(f"[DEBUG ZIP] Created ZIP archive: '{self.created_zip_path}'")
+            except PermissionError as zip_err:
+                self.failed_records.append({
+                    "student_name": "ZIP archive",
+                    "unique_val": "",
+                    "error": str(zip_err),
+                    "row_data": {},
+                    "row_index": -1,
+                })
+                print(f"[DEBUG ZIP] {zip_err}")
             except Exception as zip_err:
                 print(f"[DEBUG ZIP] ZIP packaging error: {zip_err}")
 
