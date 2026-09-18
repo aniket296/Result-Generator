@@ -56,19 +56,36 @@ from utils.constants import TEMPLATES_DIR
 
 
 class _CanvasView(QGraphicsView):
-    """QGraphicsView with Ctrl+Scroll zoom and rubber-band selection."""
+    """QGraphicsView with Ctrl+Scroll zoom, rubber-band selection, and paper canvas rendering."""
 
     def __init__(self, scene: QGraphicsScene, parent: QWidget | None = None) -> None:
         super().__init__(scene, parent)
         self.setRenderHints(
             QPainter.RenderHint.Antialiasing
             | QPainter.RenderHint.SmoothPixmapTransform
+            | QPainter.RenderHint.TextAntialiasing
         )
         self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
-        self.setBackgroundBrush(QBrush(QColor("#d1d5db")))
+        self.setBackgroundBrush(QBrush(QColor("#e5e7eb")))
         self.setStyleSheet("border: none;")
+
+    def drawBackground(self, painter: QPainter, rect: QRectF) -> None:
+        # Fill viewport with neutral canvas background
+        painter.fillRect(rect, QColor("#e5e7eb"))
+        s_rect = self.scene().sceneRect()
+        if not s_rect.isEmpty():
+            painter.save()
+            # Soft shadow around paper sheet
+            shadow_rect = s_rect.translated(5, 5)
+            painter.fillRect(shadow_rect, QColor(0, 0, 0, 30))
+            # Crisp white paper sheet
+            painter.fillRect(s_rect, QColor("#ffffff"))
+            # Paper outline border
+            painter.setPen(QColor("#9ca3af"))
+            painter.drawRect(s_rect)
+            painter.restore()
 
     def wheelEvent(self, event) -> None:
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
@@ -156,8 +173,7 @@ class TemplateEditorView(QWidget):
     def _build_toolbar(self) -> QWidget:
         # Wrap toolbar in a clean horizontal QScrollArea to prevent button text cropping on narrow screens
         scroll = QScrollArea()
-        scroll.setMinimumHeight(54)
-        scroll.setMaximumHeight(72)
+        scroll.setFixedHeight(78)
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -189,77 +205,42 @@ class TemplateEditorView(QWidget):
         container = QWidget()
         container.setStyleSheet("background: #f9fafb;")
 
-        row = QHBoxLayout(container)
-        row.setContentsMargins(16, 0, 16, 0)
-        row.setSpacing(8)
-        row.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        main_vbox = QVBoxLayout(container)
+        main_vbox.setContentsMargins(16, 6, 16, 6)
+        main_vbox.setSpacing(6)
+        main_vbox.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+
+        # ── Row 1: Title, Background, Elements & File Actions ───────────────
+        row1 = QHBoxLayout()
+        row1.setSpacing(8)
 
         title = QLabel("Template Editor")
-        title.setStyleSheet("font-size: 16px; font-weight: 700; color: #1a1a2e;")
-        row.addWidget(title)
+        title.setStyleSheet("font-size: 15px; font-weight: 700; color: #1a1a2e;")
+        row1.addWidget(title)
 
         # Lock badge
-        self._lock_badge = QLabel("🔒 Template Locked (Active Dataset Loaded)")
+        self._lock_badge = QLabel("🔒 Locked (Dataset Active)")
         self._lock_badge.setStyleSheet("""
             background: #fef3c7; color: #92400e; font-size: 11px;
-            font-weight: 600; padding: 4px 8px; border-radius: 4px;
+            font-weight: 600; padding: 3px 8px; border-radius: 4px;
         """)
         self._lock_badge.hide()
-        row.addWidget(self._lock_badge)
+        row1.addWidget(self._lock_badge)
 
-        row.addSpacing(12)
+        row1.addSpacing(8)
 
         # Action Buttons
         self._bg_btn          = self._tool_btn("🖼  Upload Background",      self._on_upload_bg)
         self._add_btn         = self._tool_btn("➕  Add Field",               self._on_add_field)
         self._add_chart_btn   = self._tool_btn("📊  Add Chart",               self._on_add_chart)
         self._add_badge_btn   = self._tool_btn("🎖  Add Badge",               self._on_add_badge)
-        self._snap_btn        = QPushButton("🧲  Snap to Grid")
-        self._snap_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
-        self._snap_btn.setCheckable(True)
-        self._snap_btn.setChecked(True)
-        self._snap_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._snap_btn.setToolTip("Toggle magnetic snap to 10px grid boundaries")
-        self._update_snap_btn_style()
-        self._snap_btn.toggled.connect(self._on_toggle_snap)
-
-        # Undo / Redo Toolbar Buttons
-        self._undo_btn        = self._tool_btn("↩  Undo", self._undo_stack.undo)
-        self._undo_btn.setToolTip("Undo last action (Ctrl+Z)")
-        self._undo_btn.setEnabled(False)
-        self._redo_btn        = self._tool_btn("↪  Redo", self._undo_stack.redo)
-        self._redo_btn.setToolTip("Redo last action (Ctrl+Y / Ctrl+Shift+Z)")
-        self._redo_btn.setEnabled(False)
-        self._undo_stack.canUndoChanged.connect(self._undo_btn.setEnabled)
-        self._undo_stack.canRedoChanged.connect(self._redo_btn.setEnabled)
-
-        # Multi-Item Alignment Buttons
-        self._align_left_btn   = self._tool_btn("⇤  Left",      self._on_align_left)
-        self._align_left_btn.setToolTip("Align selected items to the leftmost X coordinate (select 2+ items)")
-        self._align_left_btn.setEnabled(False)
-
-        self._align_center_btn = self._tool_btn("⇥⇤  Center",  self._on_align_center)
-        self._align_center_btn.setToolTip("Align selected items to the horizontal midpoint (select 2+ items)")
-        self._align_center_btn.setEnabled(False)
-
-        self._align_right_btn  = self._tool_btn("⇥  Right",     self._on_align_right)
-        self._align_right_btn.setToolTip("Align selected items to the rightmost edge (select 2+ items)")
-        self._align_right_btn.setEnabled(False)
-
-        self._distribute_v_btn = self._tool_btn("↕  Distribute", self._on_distribute_vertically)
-        self._distribute_v_btn.setToolTip("Evenly distribute vertical spacing between 3+ selected items")
-        self._distribute_v_btn.setEnabled(False)
-
-        self._export_excel_btn = self._tool_btn("📊  Export Excel Template",  self._on_export_excel)
-        self._save_btn        = self._tool_btn("💾  Save Template",           self._on_save_template)
-        self._load_btn        = self._tool_btn("📂  Open Template",           self._on_load_template)
 
         # Style the Add Chart button distinctively
         self._add_chart_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         self._add_chart_btn.setStyleSheet("""
             QPushButton {
                 background: #eff6ff; color: #1d4ed8; border: 1px solid #93c5fd;
-                border-radius: 4px; padding: 5px 12px; font-size: 12px; font-weight: 600;
+                border-radius: 4px; padding: 4px 10px; font-size: 12px; font-weight: 600;
                 min-height: 20px;
             }
             QPushButton:hover { background: #dbeafe; }
@@ -271,38 +252,101 @@ class TemplateEditorView(QWidget):
         self._add_badge_btn.setStyleSheet("""
             QPushButton {
                 background: #fffbeb; color: #b45309; border: 1px solid #fde68a;
-                border-radius: 4px; padding: 5px 12px; font-size: 12px; font-weight: 600;
+                border-radius: 4px; padding: 4px 10px; font-size: 12px; font-weight: 600;
                 min-height: 20px;
             }
             QPushButton:hover { background: #fef3c7; }
             QPushButton:disabled { background: #f9fafb; color: #9ca3af; border-color: #e5e7eb; }
         """)
 
-        row.addWidget(self._bg_btn)
-        row.addWidget(self._add_btn)
-        row.addWidget(self._add_chart_btn)
-        row.addWidget(self._add_badge_btn)
-        row.addWidget(self._snap_btn)
-        row.addWidget(self._undo_btn)
-        row.addWidget(self._redo_btn)
-        row.addWidget(self._align_left_btn)
-        row.addWidget(self._align_center_btn)
-        row.addWidget(self._align_right_btn)
-        row.addWidget(self._distribute_v_btn)
-        row.addWidget(self._export_excel_btn)
-        row.addWidget(self._save_btn)
-        row.addWidget(self._load_btn)
+        self._export_excel_btn = self._tool_btn("📊  Export Excel",            self._on_export_excel)
+        self._export_excel_btn.setToolTip("Export empty Excel dataset template matching canvas fields")
+        self._save_btn        = self._tool_btn("💾  Save Template",           self._on_save_template)
+        self._load_btn        = self._tool_btn("📂  Open Template",           self._on_load_template)
 
-        row.addStretch()
+        row1.addWidget(self._bg_btn)
+        row1.addWidget(self._add_btn)
+        row1.addWidget(self._add_chart_btn)
+        row1.addWidget(self._add_badge_btn)
+        row1.addStretch()
+        row1.addWidget(self._export_excel_btn)
+        row1.addWidget(self._save_btn)
+        row1.addWidget(self._load_btn)
+
+        # ── Row 2: Grid, History, Alignment & Zoom ──────────────────────────
+        row2 = QHBoxLayout()
+        row2.setSpacing(6)
+
+        self._snap_btn        = QPushButton("🧲  Snap to Grid")
+        self._snap_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        self._snap_btn.setCheckable(True)
+        self._snap_btn.setChecked(True)
+        self._snap_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._snap_btn.setToolTip("Toggle magnetic snap to 10px grid boundaries")
+        self._update_snap_btn_style()
+        self._snap_btn.toggled.connect(self._on_toggle_snap)
+        row2.addWidget(self._snap_btn)
+
+        row2.addWidget(self._make_v_divider())
+
+        # Undo / Redo Toolbar Buttons
+        self._undo_btn        = self._tool_btn("↩  Undo", self._undo_stack.undo)
+        self._undo_btn.setToolTip("Undo last action (Ctrl+Z)")
+        self._undo_btn.setEnabled(False)
+        self._redo_btn        = self._tool_btn("↪  Redo", self._undo_stack.redo)
+        self._redo_btn.setToolTip("Redo last action (Ctrl+Y / Ctrl+Shift+Z)")
+        self._redo_btn.setEnabled(False)
+        self._undo_stack.canUndoChanged.connect(self._undo_btn.setEnabled)
+        self._undo_stack.canRedoChanged.connect(self._redo_btn.setEnabled)
+
+        row2.addWidget(self._undo_btn)
+        row2.addWidget(self._redo_btn)
+
+        row2.addWidget(self._make_v_divider())
+
+        # Alignment Group
+        align_lbl = QLabel("Align:")
+        align_lbl.setStyleSheet("font-size: 11px; font-weight: 600; color: #6b7280;")
+        row2.addWidget(align_lbl)
+
+        self._align_left_btn   = self._tool_btn("⇤ Left",       self._on_align_left)
+        self._align_left_btn.setToolTip("Align selected items to the leftmost X coordinate (select 2+ items)")
+        self._align_left_btn.setEnabled(False)
+
+        self._align_center_btn = self._tool_btn("⇥⇤ Center",   self._on_align_center)
+        self._align_center_btn.setToolTip("Align selected items to the horizontal midpoint (select 2+ items)")
+        self._align_center_btn.setEnabled(False)
+
+        self._align_right_btn  = self._tool_btn("⇥ Right",      self._on_align_right)
+        self._align_right_btn.setToolTip("Align selected items to the rightmost edge (select 2+ items)")
+        self._align_right_btn.setEnabled(False)
+
+        self._distribute_v_btn = self._tool_btn("↕ Distribute", self._on_distribute_vertically)
+        self._distribute_v_btn.setToolTip("Evenly distribute vertical spacing between 3+ selected items")
+        self._distribute_v_btn.setEnabled(False)
+
+        row2.addWidget(self._align_left_btn)
+        row2.addWidget(self._align_center_btn)
+        row2.addWidget(self._align_right_btn)
+        row2.addWidget(self._distribute_v_btn)
+
+        row2.addStretch()
 
         # Zoom controls
+        zoom_lbl = QLabel("Zoom:")
+        zoom_lbl.setStyleSheet("font-size: 11px; font-weight: 600; color: #6b7280;")
+        row2.addWidget(zoom_lbl)
+
         zoom_out = self._icon_btn("−", lambda: self._view.scale(1 / 1.2, 1 / 1.2))
         zoom_in  = self._icon_btn("+", lambda: self._view.scale(1.2, 1.2))
-        zoom_fit = self._tool_btn("Fit", self._fit_to_view)
+        zoom_fit = self._tool_btn("🔍  Fit", self._fit_to_view)
 
-        row.addWidget(zoom_out)
-        row.addWidget(zoom_in)
-        row.addWidget(zoom_fit)
+        row2.addWidget(zoom_out)
+        row2.addWidget(zoom_in)
+        row2.addWidget(zoom_fit)
+
+        main_vbox.addLayout(row1)
+        main_vbox.addLayout(row2)
 
         scroll.setWidget(container)
         return scroll
@@ -784,7 +828,13 @@ class TemplateEditorView(QWidget):
     def _fit_to_view(self) -> None:
         r = self._scene.sceneRect()
         if not r.isEmpty():
-            self._view.fitInView(r, Qt.AspectRatioMode.KeepAspectRatio)
+            self._view.fitInView(r.adjusted(-16, -16, 16, 16), Qt.AspectRatioMode.KeepAspectRatio)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if not self._initial_fit_done:
+            self._initial_fit_done = True
+            self._fit_to_view()
 
     def _mark_dirty(self) -> None:
         self._has_unsaved_changes = True
@@ -983,3 +1033,10 @@ class TemplateEditorView(QWidget):
         """)
         btn.clicked.connect(slot)
         return btn
+
+    @staticmethod
+    def _make_v_divider() -> QFrame:
+        div = QFrame()
+        div.setFrameShape(QFrame.Shape.VLine)
+        div.setStyleSheet("color: #d1d5db; margin: 2px 4px;")
+        return div
