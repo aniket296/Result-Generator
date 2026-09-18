@@ -814,7 +814,8 @@ def create_class_print_bundles(
                             "row_data": {},
                             "row_index": -1,
                         })
-                    print(f"[DEBUG BUNDLE] {error_message}")
+                    if errors is None:
+                        print(f"[DEBUG BUNDLE] {error_message}")
                 else:
                     created_bundles.append(bundle_path)
                     print(f"[DEBUG BUNDLE] Created bundle: '{bundle_path}' ({master_doc.page_count} pages)")
@@ -1041,6 +1042,7 @@ class GeneratorWorker(QThread):
 
     # Signals
     progress = pyqtSignal(int, int, int, str, str)  # current, total, percent, filename, status
+    log_message = pyqtSignal(str)                   # worker log text for the UI
     record_succeeded = pyqtSignal(int, str)         # row_idx, file_path
     record_skipped = pyqtSignal(int, str)           # row_idx, reason
     error_occurred = pyqtSignal(int, str, dict, int) # row_idx, col_name, row_dict, retries_left
@@ -1138,6 +1140,10 @@ class GeneratorWorker(QThread):
         except Exception:
             pass
 
+    def _log(self, message: str) -> None:
+        """Emit worker diagnostics without writing to UI objects from this thread."""
+        self.log_message.emit(message)
+
     def run(self) -> None:
         self.start_time = datetime.datetime.now()
         total = len(self.rows)
@@ -1231,6 +1237,7 @@ class GeneratorWorker(QThread):
             self.progress.emit(
                 row_num, total, pct, filename_only, f"Generating {row_num}/{total}..."
             )
+            self._log(f"Generating row {row_num}/{total}: {filename_only}")
 
             try:
                 generate_single_pdf(self.template_state, row, out_file)
@@ -1238,6 +1245,7 @@ class GeneratorWorker(QThread):
                 self.successful_records.append((row, out_file))
                 generated_count += 1
                 self.record_succeeded.emit(row_num, out_file)
+                self._log(f"Generated: {filename_only}")
                 idx += 1
             except PermissionError as exc:
                 error_message = str(exc)
@@ -1250,6 +1258,7 @@ class GeneratorWorker(QThread):
                 })
                 skipped_count += 1
                 self.record_skipped.emit(row_num, error_message)
+                self._log(f"Skipped row {row_num}: {error_message}")
                 idx += 1
             except Exception as exc:
                 self._mutex.lock()
@@ -1317,7 +1326,7 @@ class GeneratorWorker(QThread):
                 self.created_zip_path = package_output_to_zip(
                     self.output_dir, progress_callback=_on_zip_prog
                 )
-                print(f"[DEBUG ZIP] Created ZIP archive: '{self.created_zip_path}'")
+                self._log(f"Created ZIP archive: {self.created_zip_path}")
             except PermissionError as zip_err:
                 self.failed_records.append({
                     "student_name": "ZIP archive",
@@ -1326,9 +1335,9 @@ class GeneratorWorker(QThread):
                     "row_data": {},
                     "row_index": -1,
                 })
-                print(f"[DEBUG ZIP] {zip_err}")
+                self._log(f"ZIP archive failed: {zip_err}")
             except Exception as zip_err:
-                print(f"[DEBUG ZIP] ZIP packaging error: {zip_err}")
+                self._log(f"ZIP packaging error: {zip_err}")
 
         # ── Post-Processing: Batch Audit & Execution Logging ────────────────
         self.end_time = datetime.datetime.now()
@@ -1361,9 +1370,9 @@ class GeneratorWorker(QThread):
                     created_bundles=self.created_bundles,
                     created_zip_path=self.created_zip_path,
                 )
-                print(f"[DEBUG REPORT] Audit report written to: '{self.report_path}'")
+                self._log(f"Audit report written to: {self.report_path}")
             except Exception as rep_err:
-                print(f"[DEBUG REPORT] Failed to write audit report: {rep_err}")
+                self._log(f"Failed to write audit report: {rep_err}")
 
         # Successful completion -> remove recovery file
         if os.path.exists(self.recovery_file):

@@ -460,6 +460,7 @@ class GenerationProgressDialog(QDialog):
 
     def _connect_signals(self) -> None:
         self.worker.progress.connect(self._on_progress)
+        self.worker.log_message.connect(self._on_log_message)
         self.worker.error_occurred.connect(self._on_error)
         self.worker.generation_finished.connect(self._on_finished)
         self.worker.generation_cancelled.connect(self._on_cancelled)
@@ -470,6 +471,11 @@ class GenerationProgressDialog(QDialog):
         remaining = max(0, total - current)
         self._stats_lbl.setText(f"Record: {current} / {total}  |  Completed: {completed}  |  Remaining: {remaining}")
         self._current_file_lbl.setText(f"Current File: {filename}")
+        self._status_title.setText(status)
+
+    def _on_log_message(self, message: str) -> None:
+        """Display worker diagnostics received through a queued Qt signal."""
+        self._current_file_lbl.setText(f"Status: {message}")
 
     def _on_error(self, row_num: int, col_name: str, row_dict: dict, retries_left: int) -> None:
         msg_box = QMessageBox(self)
