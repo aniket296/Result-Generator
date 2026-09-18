@@ -25,8 +25,10 @@ def resource_path(relative_path: str) -> str:
     Get absolute path to resource, compatible with development mode and PyInstaller frozen bundles.
     In PyInstaller bundles, sys._MEIPASS contains the runtime extraction/bundle directory path.
     """
-    if hasattr(sys, "_MEIPASS"):
-        base_path = sys._MEIPASS
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    if bundle_root:
+        base_path = os.path.abspath(bundle_root)
     else:
         base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(base_path, relative_path)
+
+    return os.path.normpath(os.path.join(base_path, relative_path))

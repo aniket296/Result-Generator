@@ -46,7 +46,8 @@ class PrintOneDialog(QDialog):
         self._matched_row: dict[str, str] | None = None
 
         self.setWindowTitle("Print Individual Student Result")
-        self.setFixedSize(560, 520)
+        self.resize(560, 520)
+        self.setMinimumSize(480, 420)
         self.setModal(True)
         self._build_ui()
 

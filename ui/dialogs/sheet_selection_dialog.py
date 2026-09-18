@@ -31,7 +31,8 @@ class SheetSelectionDialog(QDialog):
         self.filename = filename
 
         self.setWindowTitle("Select Excel Worksheet")
-        self.setFixedWidth(440)
+        self.resize(440, 320)
+        self.setMinimumWidth(360)
         self.setModal(True)
         self._build_ui()
 
@@ -138,4 +139,3 @@ class SheetSelectionDialog(QDialog):
     def get_selected_sheet(self) -> str:
         """Return the user-selected sheet name."""
         return self._combo.currentText()
-

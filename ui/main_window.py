@@ -50,7 +50,7 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self.setWindowTitle(APP_NAME)
-        self.setMinimumSize(1080, 720)
+        self.setMinimumSize(900, 600)
         self.resize(1240, 780)
 
         self._nav_buttons: list[QPushButton] = []
@@ -73,7 +73,8 @@ class MainWindow(QMainWindow):
     def _build_sidebar(self) -> QWidget:
         sidebar = QWidget()
         sidebar.setObjectName("Sidebar")
-        sidebar.setFixedWidth(230)
+        sidebar.setMinimumWidth(180)
+        sidebar.setMaximumWidth(260)
         sidebar.setStyleSheet(f"QWidget#Sidebar {{ background-color: {SIDEBAR_BG}; }}")
 
         layout = QVBoxLayout(sidebar)

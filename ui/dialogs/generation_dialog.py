@@ -82,7 +82,8 @@ class GenerationSetupDialog(QDialog):
         self.name_column: str = ""
 
         self.setWindowTitle("Result Generation Setup")
-        self.setFixedSize(620, 680)
+        self.resize(620, 680)
+        self.setMinimumSize(520, 560)
         self.setModal(True)
         self._build_ui()
         self._update_preview()
@@ -398,7 +399,8 @@ class GenerationProgressDialog(QDialog):
         self.failed_records: list[dict[str, Any]] = []
 
         self.setWindowTitle("Generating Results...")
-        self.setFixedSize(540, 320)
+        self.resize(540, 320)
+        self.setMinimumSize(460, 280)
         self.setModal(True)
         self._build_ui()
         self._connect_signals()
@@ -571,7 +573,8 @@ class GenerationCompletedDialog(QDialog):
         self.elapsed_seconds = elapsed_seconds
 
         self.setWindowTitle("Generation Summary")
-        self.setFixedSize(560, 480)
+        self.resize(560, 480)
+        self.setMinimumSize(480, 400)
         self.setModal(True)
         self._build_ui()
 
@@ -734,7 +737,8 @@ class FailedRecordsDialog(QDialog):
         self.resolved_count = 0
 
         self.setWindowTitle("Failed Records Management")
-        self.setFixedSize(680, 420)
+        self.resize(680, 420)
+        self.setMinimumSize(560, 360)
         self.setModal(True)
         self._build_ui()
 

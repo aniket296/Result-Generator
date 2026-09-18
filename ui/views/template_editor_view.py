@@ -156,7 +156,8 @@ class TemplateEditorView(QWidget):
     def _build_toolbar(self) -> QWidget:
         # Wrap toolbar in a clean horizontal QScrollArea to prevent button text cropping on narrow screens
         scroll = QScrollArea()
-        scroll.setFixedHeight(54)
+        scroll.setMinimumHeight(54)
+        scroll.setMaximumHeight(72)
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)

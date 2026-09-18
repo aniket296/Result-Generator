@@ -88,7 +88,8 @@ class PropertiesPanel(QWidget):
         self._excel_columns: list[str] = []
         self._chart_column_checkboxes: dict[str, QCheckBox] = {}
 
-        self.setFixedWidth(290)
+        self.setMinimumWidth(240)
+        self.setMaximumWidth(360)
         self.setStyleSheet("background: white;")
         self._build_ui()
 
