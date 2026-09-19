@@ -109,7 +109,15 @@ GRADE_PRESETS: dict[str, list[dict[str, Any]]] = {
 COL_CALCULATED_GRADE = "Calculated_Grade"
 COL_CALCULATED_CGPA = "Calculated_CGPA"
 COL_RESULT_STATUS = "Result_Status"
-ACADEMIC_CALCULATED_COLUMNS = [COL_CALCULATED_GRADE, COL_CALCULATED_CGPA, COL_RESULT_STATUS]
+COL_CLASS_RANK = "Class_Rank"
+COL_PERCENTILE = "Percentile"
+ACADEMIC_CALCULATED_COLUMNS = [
+    COL_CALCULATED_GRADE,
+    COL_CALCULATED_CGPA,
+    COL_RESULT_STATUS,
+    COL_CLASS_RANK,
+    COL_PERCENTILE,
+]
 
 
 # ── Core Calculators ─────────────────────────────────────────────────────────
@@ -334,6 +342,90 @@ def _parse_float(val: Any) -> float | None:
         return None
 
 
+# ── Distribution & Ranking Calculators ────────────────────────────────────────
+
+def calculate_dense_ranks(scores: Sequence[float | None]) -> list[str]:
+    """
+    Calculate dense class rank for a collection of student scores.
+    Handles ties using standard dense ranking (1, 2, 2, 3...).
+    Highest score receives Rank 1.
+    None or invalid scores receive an empty string "".
+
+    Args:
+        scores: Sequence of float scores / percentages (or None for ungradable rows).
+
+    Returns:
+        list[str]: Rank strings, e.g. ["1", "2", "2", "3"]
+    """
+    valid_scores = [s for s in scores if s is not None]
+    if not valid_scores:
+        return ["" for _ in scores]
+
+    unique_sorted = sorted(list(set(valid_scores)), reverse=True)
+    score_to_rank = {s: str(rank_idx) for rank_idx, s in enumerate(unique_sorted, start=1)}
+
+    return [score_to_rank.get(s, "") if s is not None else "" for s in scores]
+
+
+def calculate_percentiles(
+    scores: Sequence[float | None],
+    include_symbol: bool = False,
+) -> list[str]:
+    """
+    Calculate percentile rank per student based on aggregate marks across the class.
+    
+    Uses the standard mid-count cumulative distribution formula:
+    Percentile = ((B + 0.5 * E) / N) * 100
+    where:
+      - B = count of students with score strictly below
+      - E = count of students with score exactly equal
+      - N = total number of valid student scores
+
+    Args:
+        scores: Sequence of float scores / percentages (or None).
+        include_symbol: Whether to append '%' to the output string (e.g. "98.50%").
+
+    Returns:
+        list[str]: Formatted percentile strings, e.g. ["98.50", "75.00"] or ["98.50%", "75.00%"]
+    """
+    valid_scores = [s for s in scores if s is not None]
+    n = len(valid_scores)
+    if n == 0:
+        return ["" for _ in scores]
+
+    results: list[str] = []
+    for s in scores:
+        if s is None:
+            results.append("")
+            continue
+
+        b = sum(1 for x in valid_scores if x < s)
+        e = sum(1 for x in valid_scores if x == s)
+        pctile = ((b + 0.5 * e) / n) * 100.0
+        pctile = max(0.0, min(100.0, pctile))
+
+        suffix = "%" if include_symbol else ""
+        results.append(f"{pctile:.2f}{suffix}")
+
+    return results
+
+
+def calculate_class_distribution_metrics(
+    scores: Sequence[float | None],
+    rank_method: str = "dense",
+    include_percentile_symbol: bool = False,
+) -> tuple[list[str], list[str]]:
+    """
+    Compute both class ranks and percentile metrics for a class dataset.
+    
+    Returns:
+        tuple[list[str], list[str]]: (ranks, percentiles)
+    """
+    ranks = calculate_dense_ranks(scores)
+    percentiles = calculate_percentiles(scores, include_symbol=include_percentile_symbol)
+    return ranks, percentiles
+
+
 # ── Dataset Enrichment ───────────────────────────────────────────────────────
 
 def enrich_records(
@@ -343,6 +435,7 @@ def enrich_records(
     max_score: float = 100.0,
     preset: str = "CBSE",
     cgpa_method: str = "cbse_9_5",
+    include_percentile_symbol: bool = False,
     overwrite: bool = True,
 ) -> tuple[list[str], list[dict[str, str]]]:
     """
@@ -350,6 +443,8 @@ def enrich_records(
     - Calculated_Grade
     - Calculated_CGPA
     - Result_Status
+    - Class_Rank
+    - Percentile
 
     Args:
         headers: List of existing column headers.
@@ -358,6 +453,7 @@ def enrich_records(
         max_score: Maximum achievable score.
         preset: Grading preset ("CBSE", "STANDARD").
         cgpa_method: CGPA calculation method ("cbse_9_5" or "grade_point").
+        include_percentile_symbol: Whether to append '%' to percentile values.
         overwrite: Whether to overwrite existing calculated values.
 
     Returns:
@@ -368,11 +464,22 @@ def enrich_records(
         if col not in new_headers:
             new_headers.append(col)
 
+    # 1. Extract percentages for all records
+    extracted_scores: list[float | None] = []
+    for row in records:
+        pct = extract_student_percentage(row, score_column=score_column, max_score=max_score)
+        extracted_scores.append(pct)
+
+    # 2. Compute class-level distribution metrics
+    ranks = calculate_dense_ranks(extracted_scores)
+    percentiles = calculate_percentiles(extracted_scores, include_symbol=include_percentile_symbol)
+
+    # 3. Assemble enriched records
     enriched_records: list[dict[str, str]] = []
 
-    for row in records:
+    for idx, row in enumerate(records):
         row_copy = dict(row)
-        pct = extract_student_percentage(row_copy, score_column=score_column, max_score=max_score)
+        pct = extracted_scores[idx]
 
         if pct is not None:
             grade_letter, gp = calculate_grade(pct, max_score=100.0, preset=preset)
@@ -385,6 +492,10 @@ def enrich_records(
                 row_copy[COL_CALCULATED_CGPA] = f"{cgpa:.2f}"
             if overwrite or not row_copy.get(COL_RESULT_STATUS):
                 row_copy[COL_RESULT_STATUS] = status
+            if overwrite or not row_copy.get(COL_CLASS_RANK):
+                row_copy[COL_CLASS_RANK] = ranks[idx]
+            if overwrite or not row_copy.get(COL_PERCENTILE):
+                row_copy[COL_PERCENTILE] = percentiles[idx]
         else:
             if overwrite or not row_copy.get(COL_CALCULATED_GRADE):
                 row_copy[COL_CALCULATED_GRADE] = ""
@@ -392,6 +503,10 @@ def enrich_records(
                 row_copy[COL_CALCULATED_CGPA] = ""
             if overwrite or not row_copy.get(COL_RESULT_STATUS):
                 row_copy[COL_RESULT_STATUS] = ""
+            if overwrite or not row_copy.get(COL_CLASS_RANK):
+                row_copy[COL_CLASS_RANK] = ""
+            if overwrite or not row_copy.get(COL_PERCENTILE):
+                row_copy[COL_PERCENTILE] = ""
 
         enriched_records.append(row_copy)
 
@@ -404,12 +519,13 @@ def enrich_dataset_with_academic_metrics(
     max_score: float = 100.0,
     preset: str = "CBSE",
     cgpa_method: str = "cbse_9_5",
+    include_percentile_symbol: bool = False,
 ) -> pd.DataFrame:
     """
     Enrich an active pandas DataFrame directly with calculated academic columns.
     
     Returns:
-        pd.DataFrame with Calculated_Grade, Calculated_CGPA, and Result_Status columns.
+        pd.DataFrame with Calculated_Grade, Calculated_CGPA, Result_Status, Class_Rank, and Percentile columns.
     """
     records = df.to_dict(orient="records")
     headers = list(df.columns)
@@ -420,5 +536,6 @@ def enrich_dataset_with_academic_metrics(
         max_score=max_score,
         preset=preset,
         cgpa_method=cgpa_method,
+        include_percentile_symbol=include_percentile_symbol,
     )
     return pd.DataFrame(enriched)

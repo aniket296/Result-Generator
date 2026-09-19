@@ -9,9 +9,14 @@ from data_engine.academic_engine import (
     ACADEMIC_CALCULATED_COLUMNS,
     COL_CALCULATED_CGPA,
     COL_CALCULATED_GRADE,
+    COL_CLASS_RANK,
+    COL_PERCENTILE,
     COL_RESULT_STATUS,
     calculate_cgpa_from_percentage,
+    calculate_class_distribution_metrics,
+    calculate_dense_ranks,
     calculate_grade,
+    calculate_percentiles,
     cgpa_to_percentage,
     enrich_dataset_with_academic_metrics,
     enrich_records,
@@ -143,6 +148,52 @@ class TestRecordIntrospection(unittest.TestCase):
         self.assertEqual(pct, 80.0)
 
 
+class TestDistributionMetrics(unittest.TestCase):
+    """Test class-level dense ranking and percentile rank calculation."""
+
+    def test_dense_ranks_basic(self):
+        scores = [95.0, 85.0, 70.0]
+        ranks = calculate_dense_ranks(scores)
+        self.assertEqual(ranks, ["1", "2", "3"])
+
+    def test_dense_ranks_with_ties(self):
+        # Tied scores share same rank, next distinct score gets immediate next rank
+        scores = [95.0, 90.0, 90.0, 85.0, 80.0]
+        ranks = calculate_dense_ranks(scores)
+        self.assertEqual(ranks, ["1", "2", "2", "3", "4"])
+
+    def test_dense_ranks_all_equal(self):
+        scores = [88.0, 88.0, 88.0]
+        ranks = calculate_dense_ranks(scores)
+        self.assertEqual(ranks, ["1", "1", "1"])
+
+    def test_dense_ranks_with_none(self):
+        scores = [95.0, None, 80.0]
+        ranks = calculate_dense_ranks(scores)
+        self.assertEqual(ranks, ["1", "", "2"])
+
+    def test_percentile_calculation(self):
+        # 4 distinct scores: 10, 20, 30, 40
+        scores = [10.0, 20.0, 30.0, 40.0]
+        pctiles = calculate_percentiles(scores, include_symbol=False)
+        # For 40: (3 + 0.5*1)/4 * 100 = 87.50
+        # For 30: (2 + 0.5*1)/4 * 100 = 62.50
+        # For 20: (1 + 0.5*1)/4 * 100 = 37.50
+        # For 10: (0 + 0.5*1)/4 * 100 = 12.50
+        self.assertEqual(pctiles, ["12.50", "37.50", "62.50", "87.50"])
+
+    def test_percentile_with_symbol(self):
+        scores = [50.0, 100.0]
+        pctiles = calculate_percentiles(scores, include_symbol=True)
+        self.assertEqual(pctiles, ["25.00%", "75.00%"])
+
+    def test_distribution_metrics_combined(self):
+        scores = [92.0, 92.0, 75.0]
+        ranks, pctiles = calculate_class_distribution_metrics(scores)
+        self.assertEqual(ranks, ["1", "1", "2"])
+        self.assertEqual(len(pctiles), 3)
+
+
 class TestDatasetEnrichment(unittest.TestCase):
     """Test adding calculated columns directly into records and DataFrames."""
 
@@ -159,21 +210,26 @@ class TestDatasetEnrichment(unittest.TestCase):
         self.assertIn(COL_CALCULATED_GRADE, new_headers)
         self.assertIn(COL_CALCULATED_CGPA, new_headers)
         self.assertIn(COL_RESULT_STATUS, new_headers)
+        self.assertIn(COL_CLASS_RANK, new_headers)
+        self.assertIn(COL_PERCENTILE, new_headers)
 
-        # Row 1 (95%)
+        # Row 1 (95% - Rank 1)
         self.assertEqual(enriched[0][COL_CALCULATED_GRADE], "A1")
         self.assertEqual(enriched[0][COL_CALCULATED_CGPA], "10.00")
         self.assertEqual(enriched[0][COL_RESULT_STATUS], "PASSED")
+        self.assertEqual(enriched[0][COL_CLASS_RANK], "1")
 
-        # Row 2 (82%)
+        # Row 2 (82% - Rank 2)
         self.assertEqual(enriched[1][COL_CALCULATED_GRADE], "A2")
         self.assertEqual(enriched[1][COL_CALCULATED_CGPA], "8.63")
         self.assertEqual(enriched[1][COL_RESULT_STATUS], "PASSED")
+        self.assertEqual(enriched[1][COL_CLASS_RANK], "2")
 
-        # Row 3 (30%)
+        # Row 3 (30% - Rank 3)
         self.assertEqual(enriched[2][COL_CALCULATED_GRADE], "E")
         self.assertEqual(enriched[2][COL_CALCULATED_CGPA], "3.16")
         self.assertEqual(enriched[2][COL_RESULT_STATUS], "FAILED")
+        self.assertEqual(enriched[2][COL_CLASS_RANK], "3")
 
     def test_enrich_dataframe(self):
         df = pd.DataFrame([
@@ -186,14 +242,17 @@ class TestDatasetEnrichment(unittest.TestCase):
         self.assertIn("Calculated_Grade", enriched_df.columns)
         self.assertIn("Calculated_CGPA", enriched_df.columns)
         self.assertIn("Result_Status", enriched_df.columns)
+        self.assertIn("Class_Rank", enriched_df.columns)
+        self.assertIn("Percentile", enriched_df.columns)
 
         self.assertEqual(enriched_df.iloc[0]["Calculated_Grade"], "A1")
+        self.assertEqual(enriched_df.iloc[0]["Class_Rank"], "1")
         self.assertEqual(enriched_df.iloc[0]["Result_Status"], "PASSED")
 
         self.assertEqual(enriched_df.iloc[1]["Calculated_Grade"], "C1")
+        self.assertEqual(enriched_df.iloc[1]["Class_Rank"], "2")
         self.assertEqual(enriched_df.iloc[1]["Result_Status"], "PASSED")
 
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
-
