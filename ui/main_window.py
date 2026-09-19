@@ -275,6 +275,7 @@ class MainWindow(QMainWindow):
         dash_naming_pattern = self._dashboard_view.get_naming_pattern()
         dash_zip_enabled = self._dashboard_view.get_zip_package_option()
         dash_enc_enabled, dash_enc_col = self._dashboard_view.get_encryption_options()
+        dash_imp_enabled, dash_imp_mode, dash_imp_guides = self._dashboard_view.get_imposition_options()
 
         # 1. Setup Dialog
         setup_dlg = GenerationSetupDialog(
@@ -288,6 +289,9 @@ class MainWindow(QMainWindow):
             init_zip_package=dash_zip_enabled,
             init_encryption_enabled=dash_enc_enabled,
             init_password_col=dash_enc_col,
+            init_impose_enabled=dash_imp_enabled,
+            init_impose_mode=dash_imp_mode,
+            init_impose_guides=dash_imp_guides,
         )
         if setup_dlg.exec() != GenerationSetupDialog.DialogCode.Accepted:
             return
@@ -301,6 +305,9 @@ class MainWindow(QMainWindow):
         zip_package = setup_dlg.zip_package
         encryption_enabled = setup_dlg.encryption_enabled
         password_column = setup_dlg.password_column
+        impose_enabled = setup_dlg.impose_enabled
+        impose_mode = setup_dlg.impose_mode
+        impose_guides = setup_dlg.impose_guides
 
         # 2. Pre-Flight Data Sanitizer & Audit Check
         mapped_columns: list[str] = []
@@ -355,6 +362,9 @@ class MainWindow(QMainWindow):
             photo_dir=photo_dir,
             encryption_enabled=encryption_enabled,
             password_column=password_column,
+            impose_enabled=impose_enabled,
+            impose_mode=impose_mode,
+            impose_guides=impose_guides,
         )
 
         prog_dlg = GenerationProgressDialog(worker, len(rows_to_generate), self)
@@ -372,6 +382,7 @@ class MainWindow(QMainWindow):
                 parent=self,
                 created_bundles=prog_dlg.created_bundles,
                 created_zip=prog_dlg.created_zip_path,
+                created_imposition=prog_dlg.created_imposition_path,
                 report_path=prog_dlg.report_path,
                 elapsed_seconds=prog_dlg.elapsed_seconds,
             )

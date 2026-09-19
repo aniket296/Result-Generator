@@ -1735,6 +1735,9 @@ class GeneratorWorker(QThread):
         photo_dir: str = "",
         encryption_enabled: bool = False,
         password_column: str = "",
+        impose_enabled: bool = False,
+        impose_mode: str = "2-up",
+        impose_guides: bool = True,
     ) -> None:
         super().__init__(parent)
         self.template_state = template_state
@@ -1752,6 +1755,10 @@ class GeneratorWorker(QThread):
         self.photo_dir = photo_dir
         self.encryption_enabled = encryption_enabled
         self.password_column = password_column
+        self.impose_enabled = impose_enabled
+        self.impose_mode = impose_mode
+        self.impose_guides = impose_guides
+        self.created_imposition_path: str = ""
 
         self._cancelled = False
         self._mutex = QMutex()
@@ -1999,6 +2006,27 @@ class GeneratorWorker(QThread):
                 )
             except Exception as bundle_err:
                 print(f"[DEBUG BUNDLE] Bundling process error: {bundle_err}")
+
+        # ── Post-Processing: Print Imposition Engine (N-Up Multi-Card Layouts)
+        if self.impose_enabled and self.generated_files and not self._cancelled:
+            self.progress.emit(
+                total, total, 98, "Print_Ready_Imposed.pdf", f"Creating Imposed Print Sheets ({self.impose_mode})..."
+            )
+            try:
+                from generation.imposition import create_imposed_print_sheet
+                imposed_out = os.path.join(self.output_dir, "Print_Ready_Imposed.pdf")
+                self.created_imposition_path = create_imposed_print_sheet(
+                    input_pdf_paths=self.generated_files,
+                    output_pdf_path=imposed_out,
+                    mode=self.impose_mode,
+                    draw_cut_guides=self.impose_guides,
+                    student_mappings=self.successful_records,
+                    password_col=self.password_column if self.encryption_enabled else "",
+                )
+                self._log(f"Created Imposed Master: {self.created_imposition_path}")
+            except Exception as imp_err:
+                print(f"[DEBUG IMPOSITION] Imposition error: {imp_err}")
+                self._log(f"Imposition error: {imp_err}")
 
         # ── Post-Processing: Automated ZIP Packaging ────────────────────────
         if self.zip_package and self.generated_files and not self._cancelled:

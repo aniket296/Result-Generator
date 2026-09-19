@@ -362,10 +362,59 @@ class DashboardView(QWidget):
         enc_layout.addWidget(self._encrypt_col_combo)
         enc_layout.addStretch()
 
-        self._encrypt_col_lbl.setVisible(saved_encrypt)
-        self._encrypt_col_combo.setVisible(saved_encrypt)
-
         options_layout.addLayout(enc_layout)
+
+        # Print Imposition Layout Row
+        impose_layout = QHBoxLayout()
+        impose_layout.setSpacing(12)
+
+        saved_impose = settings.value("impose_layout_enabled", False, type=bool)
+        self._impose_cb = QCheckBox("🖨️ Impose Layout for Printing (N-Up Multi-Card / Duplex)")
+        self._impose_cb.setChecked(saved_impose)
+        self._impose_cb.setStyleSheet("font-size: 12px; font-weight: 600; color: #059669;")
+        self._impose_cb.setToolTip("Tile multiple cards/pages onto consolidated A4 sheets (2-Up, 8-Up, or 10-Up) saved as Print_Ready_Imposed.pdf")
+        self._impose_cb.toggled.connect(self._on_impose_toggled)
+
+        self._impose_mode_lbl = QLabel("Mode:")
+        self._impose_mode_lbl.setStyleSheet("font-size: 12px; color: #374151; font-weight: 600;")
+
+        self._impose_mode_combo = QComboBox()
+        self._impose_mode_combo.setStyleSheet("""
+            QComboBox {
+                border: 1px solid #d1d5db; border-radius: 4px;
+                padding: 4px 8px; font-size: 12px; background: white; color: #000000;
+            }
+        """)
+        self._impose_mode_combo.addItem("2-Up (Two A5 on Landscape A4)", "2-up")
+        self._impose_mode_combo.addItem("8-Up (ID Cards on A4 - 2x4)", "8-up")
+        self._impose_mode_combo.addItem("10-Up (ID Cards on A4 - 2x5)", "10-up")
+
+        saved_mode = str(settings.value("impose_layout_mode", "2-up") or "2-up")
+        for i in range(self._impose_mode_combo.count()):
+            if self._impose_mode_combo.itemData(i) == saved_mode:
+                self._impose_mode_combo.setCurrentIndex(i)
+                break
+        self._impose_mode_combo.currentIndexChanged.connect(self._on_impose_mode_changed)
+
+        saved_guides = settings.value("impose_draw_guides", True, type=bool)
+        self._impose_guides_cb = QCheckBox("Dashed Cutting Guides")
+        self._impose_guides_cb.setChecked(saved_guides)
+        self._impose_guides_cb.setStyleSheet("font-size: 11px; color: #4b5563;")
+        self._impose_guides_cb.toggled.connect(self._on_impose_guides_toggled)
+
+        impose_layout.addWidget(self._impose_cb)
+        impose_layout.addSpacing(16)
+        impose_layout.addWidget(self._impose_mode_lbl)
+        impose_layout.addWidget(self._impose_mode_combo)
+        impose_layout.addSpacing(10)
+        impose_layout.addWidget(self._impose_guides_cb)
+        impose_layout.addStretch()
+
+        self._impose_mode_lbl.setVisible(saved_impose)
+        self._impose_mode_combo.setVisible(saved_impose)
+        self._impose_guides_cb.setVisible(saved_impose)
+
+        options_layout.addLayout(impose_layout)
         v.addWidget(options_box)
 
         # Columns + Validation
@@ -625,6 +674,34 @@ class DashboardView(QWidget):
             return self._encrypt_cb.isChecked(), self._encrypt_col_combo.currentText().strip()
         settings = QSettings("TeacherResultSoftware", "ResultGenerator")
         return settings.value("encrypt_output_pdfs", False, type=bool), str(settings.value("encrypt_password_col", "") or "").strip()
+
+    def _on_impose_toggled(self, checked: bool) -> None:
+        self._impose_mode_lbl.setVisible(checked)
+        self._impose_mode_combo.setVisible(checked)
+        self._impose_guides_cb.setVisible(checked)
+        settings = QSettings("TeacherResultSoftware", "ResultGenerator")
+        settings.setValue("impose_layout_enabled", checked)
+
+    def _on_impose_mode_changed(self, index: int) -> None:
+        mode_val = self._impose_mode_combo.itemData(index) or "2-up"
+        settings = QSettings("TeacherResultSoftware", "ResultGenerator")
+        settings.setValue("impose_layout_mode", mode_val)
+
+    def _on_impose_guides_toggled(self, checked: bool) -> None:
+        settings = QSettings("TeacherResultSoftware", "ResultGenerator")
+        settings.setValue("impose_draw_guides", checked)
+
+    def get_imposition_options(self) -> tuple[bool, str, bool]:
+        """Return (impose_enabled, impose_mode, draw_guides)."""
+        if hasattr(self, "_impose_cb") and hasattr(self, "_impose_mode_combo") and hasattr(self, "_impose_guides_cb"):
+            mode = self._impose_mode_combo.currentData() or self._impose_mode_combo.currentText()
+            return self._impose_cb.isChecked(), str(mode), self._impose_guides_cb.isChecked()
+        settings = QSettings("TeacherResultSoftware", "ResultGenerator")
+        return (
+            settings.value("impose_layout_enabled", False, type=bool),
+            str(settings.value("impose_layout_mode", "2-up") or "2-up"),
+            settings.value("impose_draw_guides", True, type=bool),
+        )
 
     def get_bundle_options(self) -> tuple[bool, str]:
         return self._bundle_cb.isChecked(), self._bundle_col_combo.currentText()

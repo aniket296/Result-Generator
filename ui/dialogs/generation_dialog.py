@@ -69,6 +69,9 @@ class GenerationSetupDialog(QDialog):
         init_zip_package: bool = False,
         init_encryption_enabled: bool = False,
         init_password_col: str = "",
+        init_impose_enabled: bool = False,
+        init_impose_mode: str = "2-up",
+        init_impose_guides: bool = True,
     ) -> None:
         super().__init__(parent)
         self.template_name = template_name or "Result"
@@ -80,6 +83,9 @@ class GenerationSetupDialog(QDialog):
         self.init_zip_package = init_zip_package
         self.init_encryption_enabled = init_encryption_enabled
         self.init_password_col = init_password_col
+        self.init_impose_enabled = init_impose_enabled
+        self.init_impose_mode = init_impose_mode or "2-up"
+        self.init_impose_guides = init_impose_guides
 
         self.selected_dir: str = os.path.join(os.path.expanduser("~"), "Desktop")
         self.unique_column: str = ""
@@ -115,6 +121,18 @@ class GenerationSetupDialog(QDialog):
     @property
     def password_column(self) -> str:
         return self._encrypt_combo.currentText().strip() if hasattr(self, "_encrypt_combo") else ""
+
+    @property
+    def impose_enabled(self) -> bool:
+        return self._impose_cb.isChecked() if hasattr(self, "_impose_cb") else False
+
+    @property
+    def impose_mode(self) -> str:
+        return self._impose_mode_combo.currentData() if hasattr(self, "_impose_mode_combo") else "2-up"
+
+    @property
+    def impose_guides(self) -> bool:
+        return self._impose_guides_cb.isChecked() if hasattr(self, "_impose_guides_cb") else True
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -320,6 +338,46 @@ class GenerationSetupDialog(QDialog):
 
         b_layout.addLayout(enc_row)
 
+        # Print Imposition (N-Up Tiling) Row
+        imp_row = QHBoxLayout()
+        imp_row.setSpacing(8)
+
+        self._impose_cb = QCheckBox("🖨️ Impose Layout for Printing (N-Up)")
+        self._impose_cb.setChecked(self.init_impose_enabled)
+        self._impose_cb.setStyleSheet("font-size: 11px; color: #0284c7; font-weight: 600;")
+        self._impose_cb.toggled.connect(self._on_impose_toggled)
+
+        self._impose_mode_lbl = QLabel("Mode:")
+        self._impose_mode_lbl.setStyleSheet("font-size: 11px; color: #374151;")
+
+        self._impose_mode_combo = QComboBox()
+        self._impose_mode_combo.setStyleSheet("color: #000000; background: white; padding: 4px;")
+        self._impose_mode_combo.addItem("2-Up (Landscape A4)", "2-up")
+        self._impose_mode_combo.addItem("8-Up ID Cards (2x4 Grid)", "8-up")
+        self._impose_mode_combo.addItem("10-Up ID Cards (2x5 Grid)", "10-up")
+
+        target_mode = self.init_impose_mode if self.init_impose_mode in ("8-up", "10-up") else "2-up"
+        for i in range(self._impose_mode_combo.count()):
+            if self._impose_mode_combo.itemData(i) == target_mode:
+                self._impose_mode_combo.setCurrentIndex(i)
+                break
+
+        self._impose_guides_cb = QCheckBox("Cutting Guides")
+        self._impose_guides_cb.setChecked(self.init_impose_guides)
+        self._impose_guides_cb.setStyleSheet("font-size: 11px; color: #475569;")
+
+        imp_row.addWidget(self._impose_cb)
+        imp_row.addSpacing(10)
+        imp_row.addWidget(self._impose_mode_lbl)
+        imp_row.addWidget(self._impose_mode_combo, stretch=1)
+        imp_row.addWidget(self._impose_guides_cb)
+
+        self._impose_mode_lbl.setVisible(self.init_impose_enabled)
+        self._impose_mode_combo.setVisible(self.init_impose_enabled)
+        self._impose_guides_cb.setVisible(self.init_impose_enabled)
+
+        b_layout.addLayout(imp_row)
+
         # ZIP Package Row
         self._zip_cb = QCheckBox("Package all output results into a single ZIP archive (.zip)")
         self._zip_cb.setChecked(self.init_zip_package)
@@ -381,6 +439,11 @@ class GenerationSetupDialog(QDialog):
     def _on_encrypt_toggled(self, checked: bool) -> None:
         self._encrypt_col_lbl.setVisible(checked)
         self._encrypt_combo.setVisible(checked)
+
+    def _on_impose_toggled(self, checked: bool) -> None:
+        self._impose_mode_lbl.setVisible(checked)
+        self._impose_mode_combo.setVisible(checked)
+        self._impose_guides_cb.setVisible(checked)
 
     def _on_browse(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Select Output Directory", self.selected_dir)
@@ -448,6 +511,7 @@ class GenerationProgressDialog(QDialog):
         self.output_directory = ""
         self.created_bundles: list[str] = []
         self.created_zip_path: str = ""
+        self.created_imposition_path: str = ""
         self.report_path: str = ""
         self.elapsed_seconds: float = 0.0
         self.failed_records: list[dict[str, Any]] = []
@@ -588,6 +652,7 @@ class GenerationProgressDialog(QDialog):
         self.failed_records = failed_records
         self.created_bundles = list(getattr(self.worker, "created_bundles", []))
         self.created_zip_path = str(getattr(self.worker, "created_zip_path", ""))
+        self.created_imposition_path = str(getattr(self.worker, "created_imposition_path", ""))
         self.report_path = str(getattr(self.worker, "report_path", ""))
         self.elapsed_seconds = float(getattr(self.worker, "elapsed_seconds", 0.0))
         self.accept()
@@ -611,6 +676,7 @@ class GenerationCompletedDialog(QDialog):
         parent=None,
         created_bundles: list[str] | None = None,
         created_zip: str = "",
+        created_imposition: str = "",
         report_path: str = "",
         elapsed_seconds: float = 0.0,
     ) -> None:
@@ -623,6 +689,7 @@ class GenerationCompletedDialog(QDialog):
         self.template_state = template_state
         self.created_bundles = created_bundles or []
         self.created_zip = created_zip
+        self.created_imposition = created_imposition
         self.report_path = report_path or os.path.join(output_dir, "generation_report.txt")
         self.elapsed_seconds = elapsed_seconds
 
@@ -679,6 +746,15 @@ class GenerationCompletedDialog(QDialog):
             c_layout.addWidget(_make_lbl(
                 f"📦 <i>Output results compressed into ZIP archive: {self.created_zip}</i>",
                 "font-size: 12px; color: #4f46e5; font-weight: 600; padding: 2px 0;",
+            ))
+        if self.created_imposition and os.path.exists(self.created_imposition):
+            c_layout.addWidget(_make_lbl(
+                f"• <b>Imposed Sheet:</b> <span style='color: #0284c7; font-weight: 600;'>{os.path.basename(self.created_imposition)}</span>",
+                _lbl_style,
+            ))
+            c_layout.addWidget(_make_lbl(
+                f"🖨️ <i>Print-ready imposed multi-up layout generated: {self.created_imposition}</i>",
+                "font-size: 12px; color: #0284c7; font-weight: 600; padding: 2px 0;",
             ))
         c_layout.addWidget(_make_lbl(f"• <b>Skipped Records:</b> {self.skipped}", _lbl_style))
         c_layout.addWidget(_make_lbl(f"• <b>Failed Records:</b> {self.failed}", _lbl_style))
