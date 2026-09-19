@@ -67,6 +67,8 @@ class GenerationSetupDialog(QDialog):
         init_bundle_col: str = "",
         init_naming_pattern: str = DEFAULT_NAMING_PATTERN,
         init_zip_package: bool = False,
+        init_encryption_enabled: bool = False,
+        init_password_col: str = "",
     ) -> None:
         super().__init__(parent)
         self.template_name = template_name or "Result"
@@ -76,6 +78,8 @@ class GenerationSetupDialog(QDialog):
         self.init_bundle_col = init_bundle_col
         self.init_naming_pattern = init_naming_pattern or DEFAULT_NAMING_PATTERN
         self.init_zip_package = init_zip_package
+        self.init_encryption_enabled = init_encryption_enabled
+        self.init_password_col = init_password_col
 
         self.selected_dir: str = os.path.join(os.path.expanduser("~"), "Desktop")
         self.unique_column: str = ""
@@ -103,6 +107,14 @@ class GenerationSetupDialog(QDialog):
     @property
     def zip_package(self) -> bool:
         return self._zip_cb.isChecked() if hasattr(self, "_zip_cb") else False
+
+    @property
+    def encryption_enabled(self) -> bool:
+        return self._encrypt_cb.isChecked() if hasattr(self, "_encrypt_cb") else False
+
+    @property
+    def password_column(self) -> str:
+        return self._encrypt_combo.currentText().strip() if hasattr(self, "_encrypt_combo") else ""
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -270,6 +282,44 @@ class GenerationSetupDialog(QDialog):
 
         b_layout.addLayout(b_row)
 
+        # Security & Password Encryption Row
+        enc_row = QHBoxLayout()
+        enc_row.setSpacing(8)
+
+        self._encrypt_cb = QCheckBox("🔒 Encrypt Output PDFs (AES-256)")
+        self._encrypt_cb.setChecked(self.init_encryption_enabled)
+        self._encrypt_cb.setStyleSheet("font-size: 11px; color: #b45309; font-weight: 600;")
+        self._encrypt_cb.toggled.connect(self._on_encrypt_toggled)
+
+        self._encrypt_col_lbl = QLabel("Password Column:")
+        self._encrypt_col_lbl.setStyleSheet("font-size: 11px; color: #374151;")
+
+        self._encrypt_combo = QComboBox()
+        self._encrypt_combo.setStyleSheet("color: #000000; background: white; padding: 4px;")
+        for h in self.headers:
+            self._encrypt_combo.addItem(h)
+
+        if self.init_password_col:
+            idx = self._encrypt_combo.findText(self.init_password_col)
+            if idx >= 0:
+                self._encrypt_combo.setCurrentIndex(idx)
+        else:
+            for cand in ["Date of Birth", "DOB", "Birth Date", "Enrollment number", "Enrollment", "Roll No", "Student ID", "ID", "Phone", "Mobile"]:
+                idx = self._encrypt_combo.findText(cand, Qt.MatchFlag.MatchContains)
+                if idx >= 0:
+                    self._encrypt_combo.setCurrentIndex(idx)
+                    break
+
+        enc_row.addWidget(self._encrypt_cb)
+        enc_row.addSpacing(10)
+        enc_row.addWidget(self._encrypt_col_lbl)
+        enc_row.addWidget(self._encrypt_combo, stretch=1)
+
+        self._encrypt_col_lbl.setVisible(self.init_encryption_enabled)
+        self._encrypt_combo.setVisible(self.init_encryption_enabled)
+
+        b_layout.addLayout(enc_row)
+
         # ZIP Package Row
         self._zip_cb = QCheckBox("Package all output results into a single ZIP archive (.zip)")
         self._zip_cb.setChecked(self.init_zip_package)
@@ -327,6 +377,10 @@ class GenerationSetupDialog(QDialog):
     def _on_bundle_toggled(self, checked: bool) -> None:
         self._bundle_col_lbl.setVisible(checked)
         self._bundle_combo.setVisible(checked)
+
+    def _on_encrypt_toggled(self, checked: bool) -> None:
+        self._encrypt_col_lbl.setVisible(checked)
+        self._encrypt_combo.setVisible(checked)
 
     def _on_browse(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Select Output Directory", self.selected_dir)

@@ -274,6 +274,7 @@ class MainWindow(QMainWindow):
         dash_bundle_enabled, dash_bundle_col = self._dashboard_view.get_bundle_options()
         dash_naming_pattern = self._dashboard_view.get_naming_pattern()
         dash_zip_enabled = self._dashboard_view.get_zip_package_option()
+        dash_enc_enabled, dash_enc_col = self._dashboard_view.get_encryption_options()
 
         # 1. Setup Dialog
         setup_dlg = GenerationSetupDialog(
@@ -285,6 +286,8 @@ class MainWindow(QMainWindow):
             init_bundle_col=dash_bundle_col,
             init_naming_pattern=dash_naming_pattern,
             init_zip_package=dash_zip_enabled,
+            init_encryption_enabled=dash_enc_enabled,
+            init_password_col=dash_enc_col,
         )
         if setup_dlg.exec() != GenerationSetupDialog.DialogCode.Accepted:
             return
@@ -296,6 +299,8 @@ class MainWindow(QMainWindow):
         bundle_col = setup_dlg.bundle_column
         naming_pattern = setup_dlg.naming_pattern
         zip_package = setup_dlg.zip_package
+        encryption_enabled = setup_dlg.encryption_enabled
+        password_column = setup_dlg.password_column
 
         # 2. Pre-Flight Data Sanitizer & Audit Check
         mapped_columns: list[str] = []
@@ -348,6 +353,8 @@ class MainWindow(QMainWindow):
             dataset_name=dataset_name,
             template_path=template_path,
             photo_dir=photo_dir,
+            encryption_enabled=encryption_enabled,
+            password_column=password_column,
         )
 
         prog_dlg = GenerationProgressDialog(worker, len(rows_to_generate), self)

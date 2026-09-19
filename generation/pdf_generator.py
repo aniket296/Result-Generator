@@ -29,6 +29,7 @@ from typing import Any, Callable
 
 from PyQt6.QtCore import QMutex, QObject, QThread, QWaitCondition, pyqtSignal
 import pymupdf
+fitz = pymupdf
 
 from data_engine.header_normalizer import find_matching_header
 from utils.constants import RECOVERY_DIR
@@ -922,6 +923,7 @@ def generate_single_pdf(
     row_data: dict[str, str],
     output_path: str,
     photo_dir: str = "",
+    password: str = "",
 ) -> None:
     """
     Renders one single student record onto the template background
@@ -1363,8 +1365,20 @@ def generate_single_pdf(
         "producer": "TeacherResultSoftware Desktop Engine",
     })
 
+    # Auto-resolve password from template_state if not explicitly passed
+    if not password:
+        enc_enabled = template_state.get("encrypt_pdf") or template_state.get("encryption_enabled")
+        pw_col = template_state.get("password_column") or template_state.get("encryption_column")
+        if enc_enabled and pw_col and pw_col in row_data:
+            password = str(row_data[pw_col] or "").strip()
+
+    save_kwargs: dict[str, Any] = {"garbage": 4, "deflate": True}
+    if password:
+        save_kwargs["encryption"] = fitz.PDF_ENCRYPT_AES_256
+        save_kwargs["user_pw"] = str(password)
+
     try:
-        doc.save(output_path, garbage=4, deflate=True)
+        doc.save(output_path, **save_kwargs)
     except PermissionError as exc:
         doc.close()
         raise PermissionError(
@@ -1385,6 +1399,7 @@ def create_class_print_bundles(
     student_mappings: list[tuple[dict[str, str], str]],
     group_col: str,
     errors: list[dict[str, Any]] | None = None,
+    password_col: str = "",
 ) -> list[str]:
     """
     Groups generated individual student PDFs by class/section and merges them
@@ -1398,27 +1413,45 @@ def create_class_print_bundles(
     bundle_dir = os.path.join(output_dir, "Print_Bundles")
     os.makedirs(bundle_dir, exist_ok=True)
 
-    # Group student PDF paths by class value
-    groups: dict[str, list[str]] = {}
+    # Group student PDF records by class value
+    groups: dict[str, list[tuple[dict[str, str], str]]] = {}
     for row, pdf_path in student_mappings:
         raw_group = str(row.get(group_col, "") or "").strip()
         class_key = raw_group if raw_group else "Unassigned"
         if class_key not in groups:
             groups[class_key] = []
         if os.path.exists(pdf_path):
-            groups[class_key].append(pdf_path)
+            groups[class_key].append((row, pdf_path))
 
     created_bundles: list[str] = []
-    for class_name, pdf_files in groups.items():
-        if not pdf_files:
+    for class_name, items in groups.items():
+        if not items:
             continue
 
         master_doc = pymupdf.open()
         try:
-            for pdf_path in pdf_files:
+            for s_row, pdf_path in items:
                 student_doc = None
                 try:
                     student_doc = pymupdf.open(pdf_path)
+                    if student_doc.needs_pass:
+                        # Authenticate before merging
+                        auth_success = False
+                        auth_pw = str(s_row.get(password_col, "") or "").strip() if password_col else ""
+                        if auth_pw and student_doc.authenticate(auth_pw) > 0:
+                            auth_success = True
+                        if not auth_success:
+                            for cand in [
+                                s_row.get("Date of Birth", ""),
+                                s_row.get("DOB", ""),
+                                s_row.get("Birth Date", ""),
+                                s_row.get("Enrollment number", ""),
+                                s_row.get("Roll No", ""),
+                                s_row.get("ID", ""),
+                            ]:
+                                if cand and student_doc.authenticate(str(cand).strip()) > 0:
+                                    auth_success = True
+                                    break
                     master_doc.insert_pdf(student_doc)
                 except Exception as merge_err:
                     print(f"[DEBUG BUNDLE] Failed to merge {pdf_path} into {class_name}: {merge_err}")
@@ -1700,6 +1733,8 @@ class GeneratorWorker(QThread):
         dataset_name: str = "",
         template_path: str = "",
         photo_dir: str = "",
+        encryption_enabled: bool = False,
+        password_column: str = "",
     ) -> None:
         super().__init__(parent)
         self.template_state = template_state
@@ -1715,6 +1750,8 @@ class GeneratorWorker(QThread):
         self.dataset_name = dataset_name
         self.template_path = template_path
         self.photo_dir = photo_dir
+        self.encryption_enabled = encryption_enabled
+        self.password_column = password_column
 
         self._cancelled = False
         self._mutex = QMutex()
@@ -1872,8 +1909,24 @@ class GeneratorWorker(QThread):
             )
             self._log(f"Generating row {row_num}/{total}: {filename_only}")
 
+            # Determine student password if encryption enabled
+            student_password = ""
+            if self.encryption_enabled and self.password_column:
+                raw_pw = row.get(self.password_column, "")
+                student_password = str(raw_pw if raw_pw is not None else "").strip()
+                if not student_password:
+                    # Fallback to unique_col if password column value was empty
+                    fallback_pw = str(row.get(self.unique_col, "")).strip()
+                    student_password = fallback_pw or f"REC{row_num}"
+
             try:
-                generate_single_pdf(self.template_state, row, out_file, photo_dir=self.photo_dir)
+                generate_single_pdf(
+                    self.template_state,
+                    row,
+                    out_file,
+                    photo_dir=self.photo_dir,
+                    password=student_password,
+                )
                 self.generated_files.append(out_file)
                 self.successful_records.append((row, out_file))
                 generated_count += 1
@@ -1917,15 +1970,17 @@ class GeneratorWorker(QThread):
                 elif action == self.ACTION_RETRY:
                     self.retry_counts[idx] = retries_used + 1
                     if self.retry_counts[idx] >= 3:
+                        # Exceeded retry limit
                         self.failed_records.append({
                             "student_name": row.get(self.name_col, "Unknown"),
                             "unique_val": row.get(self.unique_col, f"Row {row_num}"),
-                            "error": f"{exc} (Max retries exceeded)",
+                            "error": f"Render failure (Max retries exceeded): {exc}",
                             "row_data": row,
                             "row_index": idx,
                         })
                         skipped_count += 1
                         idx += 1
+                    continue
 
             self._save_recovery_state(idx, generated_count, skipped_count, len(self.failed_records))
 
@@ -1940,6 +1995,7 @@ class GeneratorWorker(QThread):
                     self.successful_records,
                     self.bundle_col,
                     errors=self.failed_records,
+                    password_col=self.password_column if self.encryption_enabled else "",
                 )
             except Exception as bundle_err:
                 print(f"[DEBUG BUNDLE] Bundling process error: {bundle_err}")

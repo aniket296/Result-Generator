@@ -331,6 +331,41 @@ class DashboardView(QWidget):
         self._bundle_col_combo.hide()
 
         options_layout.addLayout(bundle_layout)
+
+        # PDF Security & Password Encryption Row
+        enc_layout = QHBoxLayout()
+        enc_layout.setSpacing(12)
+
+        saved_encrypt = settings.value("encrypt_output_pdfs", False, type=bool)
+        self._encrypt_cb = QCheckBox("🔒 Encrypt Output PDFs (AES-256 Protection)")
+        self._encrypt_cb.setChecked(saved_encrypt)
+        self._encrypt_cb.setStyleSheet("font-size: 12px; font-weight: 600; color: #b45309;")
+        self._encrypt_cb.setToolTip("Secure each output PDF with individual AES-256 password encryption using student-specific credentials")
+        self._encrypt_cb.toggled.connect(self._on_encrypt_toggled)
+
+        self._encrypt_col_lbl = QLabel("Password Column:")
+        self._encrypt_col_lbl.setStyleSheet("font-size: 12px; color: #374151; font-weight: 600;")
+
+        self._encrypt_col_combo = QComboBox()
+        self._encrypt_col_combo.setStyleSheet("""
+            QComboBox {
+                border: 1px solid #d1d5db; border-radius: 4px;
+                padding: 4px 8px; font-size: 12px; background: white; color: #000000;
+            }
+        """)
+        self._encrypt_col_combo.setToolTip("Select the column containing the student's unique password (e.g. Date of Birth, Enrollment number)")
+        self._encrypt_col_combo.currentTextChanged.connect(self._on_encrypt_col_changed)
+
+        enc_layout.addWidget(self._encrypt_cb)
+        enc_layout.addSpacing(16)
+        enc_layout.addWidget(self._encrypt_col_lbl)
+        enc_layout.addWidget(self._encrypt_col_combo)
+        enc_layout.addStretch()
+
+        self._encrypt_col_lbl.setVisible(saved_encrypt)
+        self._encrypt_col_combo.setVisible(saved_encrypt)
+
+        options_layout.addLayout(enc_layout)
         v.addWidget(options_box)
 
         # Columns + Validation
@@ -549,6 +584,21 @@ class DashboardView(QWidget):
                 self._bundle_col_combo.setCurrentIndex(idx)
                 break
 
+        # Populate encryption password column combo
+        self._encrypt_col_combo.clear()
+        for h in headers:
+            self._encrypt_col_combo.addItem(h)
+        settings = QSettings("TeacherResultSoftware", "ResultGenerator")
+        saved_enc_col = str(settings.value("encrypt_password_col", "") or "").strip()
+        if saved_enc_col and self._encrypt_col_combo.findText(saved_enc_col) >= 0:
+            self._encrypt_col_combo.setCurrentIndex(self._encrypt_col_combo.findText(saved_enc_col))
+        else:
+            for cand in ["Date of Birth", "DOB", "Birth Date", "Enrollment number", "Enrollment", "Roll No", "Student ID", "ID", "Phone", "Mobile"]:
+                idx = self._encrypt_col_combo.findText(cand, Qt.MatchFlag.MatchContains)
+                if idx >= 0:
+                    self._encrypt_col_combo.setCurrentIndex(idx)
+                    break
+
         self._export_backup_btn.setEnabled(True)
         self._empty_state.hide()
         self._loaded_state.show()
@@ -558,6 +608,23 @@ class DashboardView(QWidget):
     def _on_bundle_toggled(self, checked: bool) -> None:
         self._bundle_col_lbl.setVisible(checked)
         self._bundle_col_combo.setVisible(checked)
+
+    def _on_encrypt_toggled(self, checked: bool) -> None:
+        self._encrypt_col_lbl.setVisible(checked)
+        self._encrypt_col_combo.setVisible(checked)
+        settings = QSettings("TeacherResultSoftware", "ResultGenerator")
+        settings.setValue("encrypt_output_pdfs", checked)
+
+    def _on_encrypt_col_changed(self, text: str) -> None:
+        settings = QSettings("TeacherResultSoftware", "ResultGenerator")
+        settings.setValue("encrypt_password_col", text.strip())
+
+    def get_encryption_options(self) -> tuple[bool, str]:
+        """Return (encryption_enabled, password_column)."""
+        if hasattr(self, "_encrypt_cb") and hasattr(self, "_encrypt_col_combo"):
+            return self._encrypt_cb.isChecked(), self._encrypt_col_combo.currentText().strip()
+        settings = QSettings("TeacherResultSoftware", "ResultGenerator")
+        return settings.value("encrypt_output_pdfs", False, type=bool), str(settings.value("encrypt_password_col", "") or "").strip()
 
     def get_bundle_options(self) -> tuple[bool, str]:
         return self._bundle_cb.isChecked(), self._bundle_col_combo.currentText()
