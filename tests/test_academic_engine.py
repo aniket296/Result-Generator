@@ -12,6 +12,8 @@ from data_engine.academic_engine import (
     COL_CLASS_RANK,
     COL_PERCENTILE,
     COL_RESULT_STATUS,
+    COL_TEACHER_REMARKS,
+    DEFAULT_REMARK_BANK,
     calculate_cgpa_from_percentage,
     calculate_class_distribution_metrics,
     calculate_dense_ranks,
@@ -22,6 +24,8 @@ from data_engine.academic_engine import (
     enrich_records,
     evaluate_result_status,
     extract_student_percentage,
+    generate_teacher_remark,
+    substitute_remark_tokens,
 )
 
 
@@ -173,13 +177,8 @@ class TestDistributionMetrics(unittest.TestCase):
         self.assertEqual(ranks, ["1", "", "2"])
 
     def test_percentile_calculation(self):
-        # 4 distinct scores: 10, 20, 30, 40
         scores = [10.0, 20.0, 30.0, 40.0]
         pctiles = calculate_percentiles(scores, include_symbol=False)
-        # For 40: (3 + 0.5*1)/4 * 100 = 87.50
-        # For 30: (2 + 0.5*1)/4 * 100 = 62.50
-        # For 20: (1 + 0.5*1)/4 * 100 = 37.50
-        # For 10: (0 + 0.5*1)/4 * 100 = 12.50
         self.assertEqual(pctiles, ["12.50", "37.50", "62.50", "87.50"])
 
     def test_percentile_with_symbol(self):
@@ -192,6 +191,51 @@ class TestDistributionMetrics(unittest.TestCase):
         ranks, pctiles = calculate_class_distribution_metrics(scores)
         self.assertEqual(ranks, ["1", "1", "2"])
         self.assertEqual(len(pctiles), 3)
+
+
+class TestTeacherRemarkBank(unittest.TestCase):
+    """Test rule-based automated teacher remark generation with token substitution."""
+
+    def test_default_remarks_by_grade(self):
+        remark_a1 = generate_teacher_remark("A1")
+        self.assertIn("Exceptional mastery", remark_a1)
+
+        remark_b1 = generate_teacher_remark("B1")
+        self.assertIn("Very good academic achievement", remark_b1)
+
+        remark_d = generate_teacher_remark("D")
+        self.assertIn("Passing grade achieved", remark_d)
+
+        remark_f = generate_teacher_remark("F")
+        self.assertIn("targeted remedial intervention", remark_f)
+
+    def test_token_substitution_with_name(self):
+        record = {"Name": "Aarav Sharma", "Class": "10-A"}
+        remark = generate_teacher_remark("A1", record=record)
+        self.assertIn("Aarav Sharma", remark)
+        self.assertNotIn("[Name]", remark)
+
+    def test_custom_remark_template_with_tokens(self):
+        custom_bank = {
+            "A1": "Congratulations [Name], outstanding term with rank [Class_Rank]!",
+            "E": "Attention required for [Name].",
+        }
+        record = {"Name": "Diya", "Class_Rank": "1"}
+        remark = generate_teacher_remark("A1", record=record, custom_remark_bank=custom_bank)
+        self.assertEqual(remark, "Congratulations Diya, outstanding term with rank 1!")
+
+    def test_substitute_remark_tokens_double_braces(self):
+        template = "Well done {{Name}}, your CGPA is {{Calculated_CGPA}}."
+        record = {"Name": "Rohan", "Calculated_CGPA": "9.45"}
+        res = substitute_remark_tokens(template, record=record)
+        self.assertEqual(res, "Well done Rohan, your CGPA is 9.45.")
+
+    def test_missing_name_token_graceful_fallback(self):
+        template = "Congratulations [Name], keep it up!"
+        record = {"Roll No": "101"}
+        res = substitute_remark_tokens(template, record=record)
+        self.assertIn("Student", res)
+        self.assertNotIn("[Name]", res)
 
 
 class TestDatasetEnrichment(unittest.TestCase):
@@ -212,24 +256,28 @@ class TestDatasetEnrichment(unittest.TestCase):
         self.assertIn(COL_RESULT_STATUS, new_headers)
         self.assertIn(COL_CLASS_RANK, new_headers)
         self.assertIn(COL_PERCENTILE, new_headers)
+        self.assertIn(COL_TEACHER_REMARKS, new_headers)
 
         # Row 1 (95% - Rank 1)
         self.assertEqual(enriched[0][COL_CALCULATED_GRADE], "A1")
         self.assertEqual(enriched[0][COL_CALCULATED_CGPA], "10.00")
         self.assertEqual(enriched[0][COL_RESULT_STATUS], "PASSED")
         self.assertEqual(enriched[0][COL_CLASS_RANK], "1")
+        self.assertIn("Aarav", enriched[0][COL_TEACHER_REMARKS])
 
         # Row 2 (82% - Rank 2)
         self.assertEqual(enriched[1][COL_CALCULATED_GRADE], "A2")
         self.assertEqual(enriched[1][COL_CALCULATED_CGPA], "8.63")
         self.assertEqual(enriched[1][COL_RESULT_STATUS], "PASSED")
         self.assertEqual(enriched[1][COL_CLASS_RANK], "2")
+        self.assertIn("Diya", enriched[1][COL_TEACHER_REMARKS])
 
         # Row 3 (30% - Rank 3)
         self.assertEqual(enriched[2][COL_CALCULATED_GRADE], "E")
         self.assertEqual(enriched[2][COL_CALCULATED_CGPA], "3.16")
         self.assertEqual(enriched[2][COL_RESULT_STATUS], "FAILED")
         self.assertEqual(enriched[2][COL_CLASS_RANK], "3")
+        self.assertIn("remedial intervention", enriched[2][COL_TEACHER_REMARKS])
 
     def test_enrich_dataframe(self):
         df = pd.DataFrame([
@@ -244,10 +292,12 @@ class TestDatasetEnrichment(unittest.TestCase):
         self.assertIn("Result_Status", enriched_df.columns)
         self.assertIn("Class_Rank", enriched_df.columns)
         self.assertIn("Percentile", enriched_df.columns)
+        self.assertIn("Teacher_Remarks", enriched_df.columns)
 
         self.assertEqual(enriched_df.iloc[0]["Calculated_Grade"], "A1")
         self.assertEqual(enriched_df.iloc[0]["Class_Rank"], "1")
         self.assertEqual(enriched_df.iloc[0]["Result_Status"], "PASSED")
+        self.assertIn("Student A", enriched_df.iloc[0]["Teacher_Remarks"])
 
         self.assertEqual(enriched_df.iloc[1]["Calculated_Grade"], "C1")
         self.assertEqual(enriched_df.iloc[1]["Class_Rank"], "2")

@@ -10,6 +10,8 @@ from data_engine.academic_engine import (
     COL_CLASS_RANK,
     COL_PERCENTILE,
     COL_RESULT_STATUS,
+    COL_TEACHER_REMARKS,
+    DEFAULT_REMARK_BANK,
     GRADE_PRESETS,
     STANDARD_LETTER_MATRIX,
     calculate_cgpa_from_percentage,
@@ -22,6 +24,8 @@ from data_engine.academic_engine import (
     enrich_records,
     evaluate_result_status,
     extract_student_percentage,
+    generate_teacher_remark,
+    substitute_remark_tokens,
 )
 
 __all__ = [
@@ -32,6 +36,8 @@ __all__ = [
     "COL_CLASS_RANK",
     "COL_PERCENTILE",
     "COL_RESULT_STATUS",
+    "COL_TEACHER_REMARKS",
+    "DEFAULT_REMARK_BANK",
     "GRADE_PRESETS",
     "STANDARD_LETTER_MATRIX",
     "calculate_cgpa_from_percentage",
@@ -44,4 +50,6 @@ __all__ = [
     "enrich_records",
     "evaluate_result_status",
     "extract_student_percentage",
+    "generate_teacher_remark",
+    "substitute_remark_tokens",
 ]

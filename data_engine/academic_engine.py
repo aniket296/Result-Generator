@@ -111,13 +111,32 @@ COL_CALCULATED_CGPA = "Calculated_CGPA"
 COL_RESULT_STATUS = "Result_Status"
 COL_CLASS_RANK = "Class_Rank"
 COL_PERCENTILE = "Percentile"
+COL_TEACHER_REMARKS = "Teacher_Remarks"
 ACADEMIC_CALCULATED_COLUMNS = [
     COL_CALCULATED_GRADE,
     COL_CALCULATED_CGPA,
     COL_RESULT_STATUS,
     COL_CLASS_RANK,
     COL_PERCENTILE,
+    COL_TEACHER_REMARKS,
 ]
+
+# Default grade-bracketed remark templates (supports [Name], [Percentage], etc.)
+DEFAULT_REMARK_BANK: dict[str, str] = {
+    "A1": "Exceptional mastery and academic diligence, [Name]! Keep up the brilliant performance.",
+    "A2": "Excellent conceptual understanding and consistent hard work throughout the term, [Name].",
+    "B1": "Very good academic achievement with commendable effort and active participation.",
+    "B2": "Good performance, [Name]. With more focused practice in weaker areas, higher scores are well within reach.",
+    "C1": "Satisfactory progress. Encouraged to maintain greater consistency and regular daily revision.",
+    "C2": "Average performance. Advised to dedicate additional study time and seek guidance in core concepts.",
+    "D": "Passing grade achieved. Substantial improvement and diligent regular study are essential for the next term.",
+    "E": "Requires targeted remedial intervention, individual mentoring, and focused concept reinforcement.",
+    "F": "Requires targeted remedial intervention, individual mentoring, and focused concept reinforcement.",
+    "A": "Excellent mastery of subject concepts and commendable effort throughout the academic year.",
+    "B": "Good academic performance with consistent effort and dependable understanding.",
+    "C": "Satisfactory performance. Consistent revision will help strengthen foundational concepts.",
+    "N/A": "Completed term evaluation.",
+}
 
 
 # ── Core Calculators ─────────────────────────────────────────────────────────
@@ -426,6 +445,126 @@ def calculate_class_distribution_metrics(
     return ranks, percentiles
 
 
+# ── Teacher Remark Bank & Token Substitution ─────────────────────────────────
+
+def substitute_remark_tokens(
+    template: str,
+    record: dict[str, Any] | None = None,
+) -> str:
+    """
+    Perform token substitution inside teacher remark templates.
+    Supports bracketed tokens like [Name], [Roll No], [Percentage], [Class_Rank], [Calculated_Grade],
+    and double-bracketed tokens like {{Name}}.
+
+    Args:
+        template: The remark template text (e.g. "Outstanding work, [Name]! Keep it up.").
+        record: Optional student row dictionary containing field values.
+
+    Returns:
+        str: Substituted and cleaned remark string.
+    """
+    if not template:
+        return ""
+    if not record:
+        # Strip remaining tokens cleanly if no record provided
+        cleaned = re.sub(r'\[[A-Za-z0-9_\s]+\]|\{\{[A-Za-z0-9_\s]+\}\}', '', template)
+        cleaned = re.sub(r',\s*([.!])', r'\1', cleaned)
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        return cleaned
+
+    row_keys = list(record.keys())
+    lowered_keys = {k.strip().lower(): k for k in row_keys}
+
+    def replace_token(match: re.Match) -> str:
+        token_name = (match.group(1) or match.group(2) or "").strip()
+        if not token_name:
+            return ""
+
+        # 1. Direct match
+        if token_name in record:
+            val = str(record[token_name] or "").strip()
+            if val:
+                return val
+
+        # 2. Case-insensitive lookup
+        tok_low = token_name.lower()
+        if tok_low in lowered_keys:
+            val = str(record[lowered_keys[tok_low]] or "").strip()
+            if val:
+                return val
+
+        # 3. Fuzzy concept / name match
+        if any(w in tok_low for w in ["name", "student"]):
+            for cand in ["name", "student name", "student_name", "full name", "candidate name"]:
+                if cand in lowered_keys:
+                    val = str(record[lowered_keys[cand]] or "").strip()
+                    if val:
+                        return val
+            return "Student"
+
+        # 4. Fallback for grade / cgpa / rank / percentile tokens
+        if "grade" in tok_low and COL_CALCULATED_GRADE in record:
+            return str(record[COL_CALCULATED_GRADE] or "")
+        if "cgpa" in tok_low and COL_CALCULATED_CGPA in record:
+            return str(record[COL_CALCULATED_CGPA] or "")
+        if "rank" in tok_low and COL_CLASS_RANK in record:
+            return str(record[COL_CLASS_RANK] or "")
+        if "percentile" in tok_low and COL_PERCENTILE in record:
+            return str(record[COL_PERCENTILE] or "")
+
+        return ""
+
+    # Replace both [Token] and {{Token}} patterns
+    result = re.sub(r'\[([A-Za-z0-9_\s]+)\]|\{\{([A-Za-z0-9_\s]+)\}\}', replace_token, template)
+
+    # Clean up empty token artifacts like ", !" or duplicate spaces
+    result = re.sub(r',\s*([.!])', r'\1', result)
+    result = re.sub(r'\s+', ' ', result).strip()
+    return result
+
+
+def generate_teacher_remark(
+    grade: str,
+    record: dict[str, Any] | None = None,
+    custom_remark_bank: dict[str, str] | None = None,
+    default_template: str = "",
+) -> str:
+    """
+    Evaluate and generate a customized teacher remark for a student based on their grade and record.
+
+    Args:
+        grade: The student's letter grade (e.g. "A1", "A2", "B1", "C1", "D", "E", "F").
+        record: Optional student record for token replacement (e.g. [Name]).
+        custom_remark_bank: Optional custom dict mapping grades to template strings.
+        default_template: Optional fallback template if grade not in bank.
+
+    Returns:
+        str: The evaluated, personalized teacher remark.
+    """
+    bank = custom_remark_bank or DEFAULT_REMARK_BANK
+    clean_grade = str(grade or "").strip().upper()
+
+    template = bank.get(clean_grade)
+    if not template and default_template:
+        template = default_template
+    elif not template:
+        # Dynamic fallback matching
+        if clean_grade.startswith("A"):
+            template = bank.get("A1", bank.get("A", "Outstanding performance and academic effort!"))
+        elif clean_grade.startswith("B"):
+            template = bank.get("B1", bank.get("B", "Good academic effort with consistent participation."))
+        elif clean_grade.startswith("C"):
+            template = bank.get("C1", bank.get("C", "Satisfactory effort. Regular revision recommended."))
+        elif clean_grade.startswith("D"):
+            template = bank.get("D", "Passing grade achieved. Substantial improvement required.")
+        elif clean_grade in ("E", "F"):
+            template = bank.get("E", bank.get("F", "Requires targeted remedial intervention and mentoring."))
+        else:
+            template = bank.get("N/A", "Completed term evaluation.")
+
+    return substitute_remark_tokens(template, record=record)
+
+
 # ── Dataset Enrichment ───────────────────────────────────────────────────────
 
 def enrich_records(
@@ -436,6 +575,7 @@ def enrich_records(
     preset: str = "CBSE",
     cgpa_method: str = "cbse_9_5",
     include_percentile_symbol: bool = False,
+    custom_remark_bank: dict[str, str] | None = None,
     overwrite: bool = True,
 ) -> tuple[list[str], list[dict[str, str]]]:
     """
@@ -445,6 +585,7 @@ def enrich_records(
     - Result_Status
     - Class_Rank
     - Percentile
+    - Teacher_Remarks
 
     Args:
         headers: List of existing column headers.
@@ -454,6 +595,7 @@ def enrich_records(
         preset: Grading preset ("CBSE", "STANDARD").
         cgpa_method: CGPA calculation method ("cbse_9_5" or "grade_point").
         include_percentile_symbol: Whether to append '%' to percentile values.
+        custom_remark_bank: Optional custom remark template bank.
         overwrite: Whether to overwrite existing calculated values.
 
     Returns:
@@ -496,6 +638,13 @@ def enrich_records(
                 row_copy[COL_CLASS_RANK] = ranks[idx]
             if overwrite or not row_copy.get(COL_PERCENTILE):
                 row_copy[COL_PERCENTILE] = percentiles[idx]
+
+            # Generate remark after calculated properties are in row_copy
+            remark = generate_teacher_remark(
+                grade_letter, record=row_copy, custom_remark_bank=custom_remark_bank
+            )
+            if overwrite or not row_copy.get(COL_TEACHER_REMARKS):
+                row_copy[COL_TEACHER_REMARKS] = remark
         else:
             if overwrite or not row_copy.get(COL_CALCULATED_GRADE):
                 row_copy[COL_CALCULATED_GRADE] = ""
@@ -507,6 +656,8 @@ def enrich_records(
                 row_copy[COL_CLASS_RANK] = ""
             if overwrite or not row_copy.get(COL_PERCENTILE):
                 row_copy[COL_PERCENTILE] = ""
+            if overwrite or not row_copy.get(COL_TEACHER_REMARKS):
+                row_copy[COL_TEACHER_REMARKS] = ""
 
         enriched_records.append(row_copy)
 
@@ -520,12 +671,13 @@ def enrich_dataset_with_academic_metrics(
     preset: str = "CBSE",
     cgpa_method: str = "cbse_9_5",
     include_percentile_symbol: bool = False,
+    custom_remark_bank: dict[str, str] | None = None,
 ) -> pd.DataFrame:
     """
     Enrich an active pandas DataFrame directly with calculated academic columns.
     
     Returns:
-        pd.DataFrame with Calculated_Grade, Calculated_CGPA, Result_Status, Class_Rank, and Percentile columns.
+        pd.DataFrame with Calculated_Grade, Calculated_CGPA, Result_Status, Class_Rank, Percentile, and Teacher_Remarks columns.
     """
     records = df.to_dict(orient="records")
     headers = list(df.columns)
@@ -537,5 +689,6 @@ def enrich_dataset_with_academic_metrics(
         preset=preset,
         cgpa_method=cgpa_method,
         include_percentile_symbol=include_percentile_symbol,
+        custom_remark_bank=custom_remark_bank,
     )
     return pd.DataFrame(enriched)
