@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
 )
 from utils.constants import DEFAULT_NAMING_PATTERN
 
+from data_engine.academic_engine import enrich_records
 from data_engine.excel_loader import (
     export_dataset_backup,
     get_sheet_names,
@@ -491,6 +492,10 @@ class DashboardView(QWidget):
                 QMessageBox.critical(self, "Backup Error", f"Failed to save backup:\n{exc}")
 
     def _apply_dataset(self, filename: str, headers: list[str], rows: list[dict[str, str]]) -> None:
+        headers, rows = enrich_records(headers, rows)
+        self._headers = headers
+        self._rows = rows
+
         self._filename_label.setText(filename)
         self._rowcount_badge.setText(f"{len(rows)} rows  •  {len(headers)} columns")
 
