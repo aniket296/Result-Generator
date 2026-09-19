@@ -44,6 +44,7 @@ from data_engine.header_normalizer import find_matching_header
 from ui.widgets.badge_item import BadgeItem
 from ui.widgets.chart_item import ChartItem
 from ui.widgets.field_item import FieldItem
+from ui.widgets.photo_item import PhotoItem
 
 
 class PropertiesPanel(QWidget):
@@ -78,7 +79,14 @@ class PropertiesPanel(QWidget):
     badge_image_changed = pyqtSignal(str)          # absolute image path
     badge_rule_changed  = pyqtSignal(str, str, str) # column, operator, value
 
+    # ── Signals (PhotoItem) ───────────────────────────────────────────────────
+    photo_id_column_changed    = pyqtSignal(str)
+    photo_border_color_changed = pyqtSignal(str)
+    photo_border_width_changed = pyqtSignal(float)
+    photo_corner_radius_changed = pyqtSignal(float)
+
     _NO_COL = "-- None (use Label) --"
+    _AUTO_ID_COL = "-- Auto (Enrollment/Unique) --"
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -123,8 +131,19 @@ class PropertiesPanel(QWidget):
         self._badge_col_combo.setCurrentIndex(max(0, idx2))
         self._badge_col_combo.blockSignals(False)
 
-    def load_item(self, item: FieldItem | ChartItem | BadgeItem | None) -> None:
-        """Bind to the currently selected item (FieldItem, ChartItem, or BadgeItem), or show empty state."""
+        # Photo: update photo ID mapping column combo
+        current_photo = self._photo_id_combo.currentText()
+        self._photo_id_combo.blockSignals(True)
+        self._photo_id_combo.clear()
+        self._photo_id_combo.addItem(self._AUTO_ID_COL)
+        for col in self._excel_columns:
+            self._photo_id_combo.addItem(col)
+        idx3 = self._photo_id_combo.findText(current_photo)
+        self._photo_id_combo.setCurrentIndex(max(0, idx3))
+        self._photo_id_combo.blockSignals(False)
+
+    def load_item(self, item: FieldItem | ChartItem | BadgeItem | PhotoItem | None) -> None:
+        """Bind to the currently selected item (FieldItem, ChartItem, BadgeItem, or PhotoItem), or show empty state."""
         self._item = item
         if item is None:
             self._scroll.hide()
@@ -147,6 +166,7 @@ class PropertiesPanel(QWidget):
                 # ── Chart mode ──
                 self._field_container.hide()
                 self._badge_container.hide()
+                self._photo_container.hide()
                 self._chart_container.show()
                 self._panel_title.setText("Chart Properties")
 
@@ -164,6 +184,7 @@ class PropertiesPanel(QWidget):
                 # ── Badge mode ──
                 self._field_container.hide()
                 self._chart_container.hide()
+                self._photo_container.hide()
                 self._badge_container.show()
                 self._panel_title.setText("Badge Properties")
 
@@ -190,6 +211,26 @@ class PropertiesPanel(QWidget):
 
                 # Rule value
                 self._badge_value_edit.setText(item.rule_value)
+
+            elif isinstance(item, PhotoItem):
+                # ── Photo mode ──
+                self._field_container.hide()
+                self._chart_container.hide()
+                self._badge_container.hide()
+                self._photo_container.show()
+                self._panel_title.setText("Photo Properties")
+
+                # ID Column
+                if item.photo_id_column and item.photo_id_column in self._excel_columns:
+                    self._photo_id_combo.setCurrentText(item.photo_id_column)
+                else:
+                    self._photo_id_combo.setCurrentIndex(0)
+
+                # Border styling
+                self._photo_color_hex = item.border_color
+                self._sync_photo_color_btn()
+                self._photo_border_width_spin.setValue(int(item.border_width))
+                self._photo_radius_spin.setValue(int(item.corner_radius))
 
             else:
                 # ── Field mode ──
@@ -308,6 +349,15 @@ class PropertiesPanel(QWidget):
         self._build_badge_section(bc_layout)
         self._form.addWidget(self._badge_container)
         self._badge_container.hide()
+
+        # ── Photo-specific container ─────────────────────────────────────
+        self._photo_container = QWidget()
+        pc_layout = QVBoxLayout(self._photo_container)
+        pc_layout.setContentsMargins(0, 0, 0, 0)
+        pc_layout.setSpacing(8)
+        self._build_photo_section(pc_layout)
+        self._form.addWidget(self._photo_container)
+        self._photo_container.hide()
 
         # ── Shared sections ──────────────────────────────────────────────
         self._build_geometry_section(self._form)
@@ -554,6 +604,57 @@ class PropertiesPanel(QWidget):
         rule_row.addLayout(val_col, stretch=2)
         layout.addLayout(rule_row)
 
+    def _build_photo_section(self, layout: QVBoxLayout) -> None:
+        layout.addWidget(self._section_lbl("Photo Identification"))
+        layout.addWidget(self._caption("Student ID Column for Photo lookup:"))
+
+        # Column selection
+        self._photo_id_combo = QComboBox()
+        self._photo_id_combo.setStyleSheet(self._INPUT)
+        self._photo_id_combo.addItem(self._AUTO_ID_COL)
+        self._photo_id_combo.currentTextChanged.connect(self._on_photo_id_changed)
+        layout.addWidget(self._photo_id_combo)
+
+        desc = QLabel("Searches Photo Folder for {ID}.jpg / .png")
+        desc.setStyleSheet("font-size: 11px; color: #64748b; font-style: italic;")
+        layout.addWidget(desc)
+
+        layout.addSpacing(6)
+        layout.addWidget(self._section_lbl("Frame & Styling"))
+
+        # Border Color & Width
+        b_row = QHBoxLayout()
+        b_row.setSpacing(6)
+
+        self._photo_color_btn = QPushButton()
+        self._photo_color_btn.setFixedSize(36, 26)
+        self._photo_color_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._photo_color_btn.clicked.connect(self._on_photo_color_clicked)
+        self._photo_color_hex = "#6b7280"
+        self._sync_photo_color_btn()
+
+        self._photo_border_width_spin = QSpinBox()
+        self._photo_border_width_spin.setRange(0, 20)
+        self._photo_border_width_spin.setValue(1)
+        self._photo_border_width_spin.setStyleSheet(self._INPUT)
+        self._photo_border_width_spin.valueChanged.connect(self._on_photo_border_width_changed)
+
+        self._photo_radius_spin = QSpinBox()
+        self._photo_radius_spin.setRange(0, 50)
+        self._photo_radius_spin.setValue(4)
+        self._photo_radius_spin.setStyleSheet(self._INPUT)
+        self._photo_radius_spin.valueChanged.connect(self._on_photo_radius_changed)
+
+        b_row.addWidget(self._caption("Color:"))
+        b_row.addWidget(self._photo_color_btn)
+        b_row.addSpacing(4)
+        b_row.addWidget(self._caption("Border:"))
+        b_row.addWidget(self._photo_border_width_spin, stretch=1)
+        b_row.addSpacing(4)
+        b_row.addWidget(self._caption("Radius:"))
+        b_row.addWidget(self._photo_radius_spin, stretch=1)
+        layout.addLayout(b_row)
+
     def _build_geometry_section(self, layout: QVBoxLayout) -> None:
         layout.addSpacing(10)
         layout.addWidget(self._section_lbl("Position & Dimensions"))
@@ -679,6 +780,38 @@ class PropertiesPanel(QWidget):
         """Emit signal only when not updating and a BadgeItem is selected."""
         if not self._updating and isinstance(self._item, BadgeItem):
             emit_fn()
+
+    def _photo_live(self, emit_fn) -> None:
+        """Emit signal only when not updating and a PhotoItem is selected."""
+        if not self._updating and isinstance(self._item, PhotoItem):
+            emit_fn()
+
+    def _on_photo_id_changed(self, text: str) -> None:
+        col = "" if text == self._AUTO_ID_COL else text.strip()
+        self._photo_live(lambda: self.photo_id_column_changed.emit(col))
+
+    def _on_photo_color_clicked(self) -> None:
+        col = QColorDialog.getColor(QColor(self._photo_color_hex), self, "Select Photo Border Color")
+        if col.isValid():
+            self._photo_color_hex = col.name()
+            self._sync_photo_color_btn()
+            self._photo_live(lambda: self.photo_border_color_changed.emit(self._photo_color_hex))
+
+    def _sync_photo_color_btn(self) -> None:
+        if hasattr(self, "_photo_color_btn"):
+            self._photo_color_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {self._photo_color_hex};
+                    border: 1px solid #9ca3af;
+                    border-radius: 3px;
+                }}
+            """)
+
+    def _on_photo_border_width_changed(self, val: int) -> None:
+        self._photo_live(lambda: self.photo_border_width_changed.emit(float(val)))
+
+    def _on_photo_radius_changed(self, val: int) -> None:
+        self._photo_live(lambda: self.photo_corner_radius_changed.emit(float(val)))
 
     def _on_color_clicked(self) -> None:
         col = QColorDialog.getColor(QColor(self._color_hex), self, "Select Text Color")

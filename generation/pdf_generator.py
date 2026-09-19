@@ -532,12 +532,46 @@ def _evaluate_badge_rule(
     return False
 
 
+def find_student_photo_path(photo_dir: str, id_val: str) -> str | None:
+    """
+    Look for a student photo in photo_dir matching id_val with standard image extensions.
+    Supports .jpg, .jpeg, .png, .bmp, .webp (case-insensitive).
+    """
+    if not photo_dir or not os.path.isdir(photo_dir) or not id_val:
+        return None
+
+    clean_id = str(id_val).strip()
+    if not clean_id or clean_id.lower() in ("nan", "none", "<na>"):
+        return None
+
+    # 1. Direct match with common extensions
+    for ext in (".jpg", ".jpeg", ".png", ".bmp", ".webp", ".JPG", ".JPEG", ".PNG", ".BMP", ".WEBP"):
+        candidate = os.path.join(photo_dir, f"{clean_id}{ext}")
+        if os.path.isfile(candidate):
+            return candidate
+
+    # 2. Case-insensitive scan in photo_dir
+    try:
+        lower_id = clean_id.lower()
+        for fname in os.listdir(photo_dir):
+            stem, ext = os.path.splitext(fname)
+            if stem.lower() == lower_id and ext.lower() in (".jpg", ".jpeg", ".png", ".bmp", ".webp"):
+                full_path = os.path.join(photo_dir, fname)
+                if os.path.isfile(full_path):
+                    return full_path
+    except Exception:
+        pass
+
+    return None
+
+
 # ── Single PDF Generator ─────────────────────────────────────────────────────
 
 def generate_single_pdf(
     template_state: dict[str, Any],
     row_data: dict[str, str],
     output_path: str,
+    photo_dir: str = "",
 ) -> None:
     """
     Renders one single student record onto the template background
@@ -736,6 +770,78 @@ def generate_single_pdf(
                     print(f"[DEBUG BADGE] Insert error for '{label}': {badge_err}")
             else:
                 print(f"[DEBUG BADGE] Image not found or path empty: '{badge_path}'")
+
+    # ── Render student photos ─────────────────────────────────────────────────
+    photos = template_state.get("photos", [])
+    if photos:
+        effective_photo_dir = photo_dir or template_state.get("photo_dir", "")
+        if not effective_photo_dir:
+            try:
+                from PyQt6.QtCore import QSettings
+                effective_photo_dir = str(QSettings("TeacherResultSoftware", "ResultGenerator").value("photo_dir", "") or "")
+            except Exception:
+                effective_photo_dir = ""
+
+        for photo_spec in photos:
+            label = photo_spec.get("label", "Student Photo")
+            id_col = photo_spec.get("photo_id_column", "").strip()
+            id_val = ""
+
+            if id_col:
+                id_val = _extract_field_value({"mapped_column": id_col, "label": id_col}, row_data)
+            else:
+                # Auto-lookup in common ID columns
+                for cand in ["Enrollment number", "Enrollment", "Roll No", "ID", "Student ID", "Admission No"]:
+                    matched = find_matching_header(cand, list(row_data.keys()))
+                    if matched and matched in row_data:
+                        id_val = str(row_data[matched] or "").strip()
+                        if id_val and id_val.lower() not in ("nan", "none", "<na>"):
+                            break
+
+            px0 = max(0.0, float(photo_spec.get("x", 0.0)) * scale_x)
+            py0 = max(0.0, float(photo_spec.get("y", 0.0)) * scale_y)
+            pw  = max(10.0, float(photo_spec.get("width", 90.0)) * scale_x)
+            ph  = max(10.0, float(photo_spec.get("height", 110.0)) * scale_y)
+
+            photo_rect = pymupdf.Rect(px0, py0, px0 + pw, py0 + ph)
+            photo_file = find_student_photo_path(effective_photo_dir, id_val)
+
+            border_w = max(0.0, float(photo_spec.get("border_width", 1.0)))
+            border_c = _hex_to_rgb_float(photo_spec.get("border_color", "#6b7280"))
+
+            print(
+                f"[DEBUG PHOTO] '{label}' | ID: '{id_val}' | File: '{photo_file}' "
+                f"| Pos: ({px0:.1f}, {py0:.1f}) | Dim: ({pw:.1f}×{ph:.1f})"
+            )
+
+            if photo_file and os.path.exists(photo_file):
+                try:
+                    page.insert_image(photo_rect, filename=photo_file, keep_proportion=True)
+                    if border_w > 0:
+                        try:
+                            page.draw_rect(photo_rect, color=border_c, width=border_w)
+                        except Exception:
+                            pass
+                except Exception as p_err:
+                    print(f"[DEBUG PHOTO] Insert error for '{label}' (File: {photo_file}): {p_err}")
+            else:
+                # Graceful missing photo handling: Draw a clean subtle neutral placeholder box
+                try:
+                    page.draw_rect(
+                        photo_rect,
+                        color=border_c if border_w > 0 else (0.8, 0.8, 0.8),
+                        fill=(0.95, 0.95, 0.96),
+                        width=max(1.0, border_w),
+                    )
+                    page.insert_text(
+                        pymupdf.Point(px0 + pw * 0.15, py0 + ph * 0.55),
+                        "No Photo",
+                        fontsize=max(6.0, min(pw, ph) * 0.12),
+                        fontname="helv",
+                        color=(0.6, 0.6, 0.6),
+                    )
+                except Exception as p_err:
+                    print(f"[DEBUG PHOTO] Placeholder drawing error for '{label}': {p_err}")
 
     # Stamp internal template identity in metadata
     doc.set_metadata({
@@ -1079,6 +1185,7 @@ class GeneratorWorker(QThread):
         zip_package: bool = False,
         dataset_name: str = "",
         template_path: str = "",
+        photo_dir: str = "",
     ) -> None:
         super().__init__(parent)
         self.template_state = template_state
@@ -1093,6 +1200,7 @@ class GeneratorWorker(QThread):
         self.zip_package = zip_package
         self.dataset_name = dataset_name
         self.template_path = template_path
+        self.photo_dir = photo_dir
 
         self._cancelled = False
         self._mutex = QMutex()
@@ -1251,7 +1359,7 @@ class GeneratorWorker(QThread):
             self._log(f"Generating row {row_num}/{total}: {filename_only}")
 
             try:
-                generate_single_pdf(self.template_state, row, out_file)
+                generate_single_pdf(self.template_state, row, out_file, photo_dir=self.photo_dir)
                 self.generated_files.append(out_file)
                 self.successful_records.append((row, out_file))
                 generated_count += 1

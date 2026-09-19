@@ -330,6 +330,7 @@ class MainWindow(QMainWindow):
         # 3. Worker Thread & Live Dashboard
         dataset_name = self._dashboard_view.get_dataset_name()
         template_path = template_state.get("background", {}).get("path", "")
+        photo_dir = self._dashboard_view.get_photo_dir()
 
         worker = GeneratorWorker(
             template_state=template_state,
@@ -344,6 +345,7 @@ class MainWindow(QMainWindow):
             zip_package=zip_package,
             dataset_name=dataset_name,
             template_path=template_path,
+            photo_dir=photo_dir,
         )
 
         prog_dlg = GenerationProgressDialog(worker, len(rows_to_generate), self)

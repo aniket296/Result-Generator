@@ -262,6 +262,42 @@ class DashboardView(QWidget):
         pattern_row.addWidget(pattern_hint)
         options_layout.addLayout(pattern_row)
 
+        # Photo Directory Row
+        photo_row = QHBoxLayout()
+        photo_row.setSpacing(10)
+
+        photo_lbl = QLabel("Student Photos Folder:")
+        photo_lbl.setStyleSheet("font-size: 12px; font-weight: 600; color: #374151;")
+
+        saved_photo_dir = str(settings.value("photo_dir", "") or "")
+        self._photo_dir_input = QLineEdit(saved_photo_dir)
+        self._photo_dir_input.setPlaceholderText("Select folder containing {ID}.jpg / .png photos (optional)")
+        self._photo_dir_input.setStyleSheet("""
+            QLineEdit {
+                border: 1px solid #d1d5db; border-radius: 4px;
+                padding: 5px 10px; font-size: 12px;
+                background: white; color: #111827;
+            }
+            QLineEdit:focus { border-color: #3b82f6; }
+        """)
+        self._photo_dir_input.textChanged.connect(self._on_photo_dir_changed)
+
+        browse_photo_btn = QPushButton("📁 Browse")
+        browse_photo_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        browse_photo_btn.setStyleSheet("""
+            QPushButton {
+                background: #ffffff; color: #374151; border: 1px solid #d1d5db;
+                border-radius: 4px; padding: 5px 12px; font-size: 12px; font-weight: 600;
+            }
+            QPushButton:hover { background: #f3f4f6; color: #111827; }
+        """)
+        browse_photo_btn.clicked.connect(self._on_browse_photo_dir)
+
+        photo_row.addWidget(photo_lbl)
+        photo_row.addWidget(self._photo_dir_input, stretch=1)
+        photo_row.addWidget(browse_photo_btn)
+        options_layout.addLayout(photo_row)
+
         # Print Bundling & ZIP Row
         bundle_layout = QHBoxLayout()
         bundle_layout.setSpacing(12)
@@ -538,6 +574,22 @@ class DashboardView(QWidget):
     def _on_pattern_changed(self, text: str) -> None:
         settings = QSettings("TeacherResultSoftware", "ResultGenerator")
         settings.setValue("naming_pattern", text.strip() or DEFAULT_NAMING_PATTERN)
+
+    def _on_browse_photo_dir(self) -> None:
+        current = self.get_photo_dir()
+        selected = QFileDialog.getExistingDirectory(self, "Select Student Photos Folder", current or "")
+        if selected:
+            self._photo_dir_input.setText(selected)
+
+    def _on_photo_dir_changed(self, text: str) -> None:
+        settings = QSettings("TeacherResultSoftware", "ResultGenerator")
+        settings.setValue("photo_dir", text.strip())
+
+    def get_photo_dir(self) -> str:
+        if hasattr(self, "_photo_dir_input"):
+            return self._photo_dir_input.text().strip()
+        settings = QSettings("TeacherResultSoftware", "ResultGenerator")
+        return str(settings.value("photo_dir", "") or "").strip()
 
     def _on_clear(self) -> None:
         self._headers = []

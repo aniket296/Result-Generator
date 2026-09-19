@@ -104,6 +104,8 @@ class AddItemCommand(QUndoCommand):
             self.editor._chart_items.remove(self.item)
         elif self.item_type == "badge" and self.item in self.editor._badge_items:
             self.editor._badge_items.remove(self.item)
+        elif self.item_type == "photo" and self.item in self.editor._photo_items:
+            self.editor._photo_items.remove(self.item)
 
         self.editor._scene.clearSelection()
         if hasattr(self.editor, "_mark_dirty"):
@@ -119,6 +121,8 @@ class AddItemCommand(QUndoCommand):
             self.editor._chart_items.append(self.item)
         elif self.item_type == "badge" and self.item not in self.editor._badge_items:
             self.editor._badge_items.append(self.item)
+        elif self.item_type == "photo" and self.item not in self.editor._photo_items:
+            self.editor._photo_items.append(self.item)
 
         self.editor._scene.clearSelection()
         self.item.setSelected(True)
@@ -151,6 +155,8 @@ class DeleteItemCommand(QUndoCommand):
             self.editor._chart_items.append(self.item)
         elif self.item_type == "badge" and self.item not in self.editor._badge_items:
             self.editor._badge_items.append(self.item)
+        elif self.item_type == "photo" and self.item not in self.editor._photo_items:
+            self.editor._photo_items.append(self.item)
 
         self.editor._scene.clearSelection()
         self.item.setSelected(True)
@@ -167,6 +173,8 @@ class DeleteItemCommand(QUndoCommand):
             self.editor._chart_items.remove(self.item)
         elif self.item_type == "badge" and self.item in self.editor._badge_items:
             self.editor._badge_items.remove(self.item)
+        elif self.item_type == "photo" and self.item in self.editor._photo_items:
+            self.editor._photo_items.remove(self.item)
 
         self.editor._scene.clearSelection()
         if hasattr(self.editor, "_mark_dirty"):
@@ -259,6 +267,14 @@ class ChangePropertyCommand(QUndoCommand):
         elif prop == "rule":
             col, op, v = val
             self.item.set_rule(col, op, v)
+        elif prop == "photo_id_column":
+            self.item.set_photo_id_column(val)
+        elif prop == "border_color":
+            self.item.set_border_color(val)
+        elif prop == "border_width":
+            self.item.set_border_width(val)
+        elif prop == "corner_radius":
+            self.item.set_corner_radius(val)
 
         if hasattr(self.editor, "_selected_item") and self.editor._selected_item is self.item:
             self.editor._panel.load_item(self.item)

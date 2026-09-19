@@ -51,6 +51,7 @@ from ui.undo_commands import (
 from ui.widgets.badge_item import BadgeItem
 from ui.widgets.chart_item import ChartItem
 from ui.widgets.field_item import FieldItem
+from ui.widgets.photo_item import PhotoItem
 from ui.widgets.properties_panel import PropertiesPanel
 from utils.constants import TEMPLATES_DIR
 
@@ -106,13 +107,15 @@ class TemplateEditorView(QWidget):
         self._field_items: list[FieldItem] = []
         self._chart_items: list[ChartItem] = []
         self._badge_items: list[BadgeItem] = []
+        self._photo_items: list[PhotoItem] = []
         self._field_counter: int = 0
         self._chart_counter: int = 0
         self._badge_counter: int = 0
+        self._photo_counter: int = 0
         self._bg_item: QGraphicsPixmapItem | None = None
         self._bg_type: str = ""
         self._bg_path: str = ""
-        self._selected_item: FieldItem | ChartItem | BadgeItem | None = None
+        self._selected_item: FieldItem | ChartItem | BadgeItem | PhotoItem | None = None
         self._excel_headers: list[str] = []
         self._initial_fit_done: bool = False
         self._has_unsaved_changes: bool = False
@@ -234,6 +237,7 @@ class TemplateEditorView(QWidget):
         self._add_btn         = self._tool_btn("➕  Add Field",               self._on_add_field)
         self._add_chart_btn   = self._tool_btn("📊  Add Chart",               self._on_add_chart)
         self._add_badge_btn   = self._tool_btn("🎖  Add Badge",               self._on_add_badge)
+        self._add_photo_btn   = self._tool_btn("📷  Add Photo",               self._on_add_photo)
 
         # Style the Add Chart button distinctively
         self._add_chart_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
@@ -259,6 +263,18 @@ class TemplateEditorView(QWidget):
             QPushButton:disabled { background: #f9fafb; color: #9ca3af; border-color: #e5e7eb; }
         """)
 
+        # Style the Add Photo button distinctively
+        self._add_photo_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        self._add_photo_btn.setStyleSheet("""
+            QPushButton {
+                background: #f5f3ff; color: #6d28d9; border: 1px solid #c4b5fd;
+                border-radius: 4px; padding: 4px 10px; font-size: 12px; font-weight: 600;
+                min-height: 20px;
+            }
+            QPushButton:hover { background: #ede9fe; }
+            QPushButton:disabled { background: #f9fafb; color: #9ca3af; border-color: #e5e7eb; }
+        """)
+
         self._export_excel_btn = self._tool_btn("📊  Export Excel",            self._on_export_excel)
         self._export_excel_btn.setToolTip("Export empty Excel dataset template matching canvas fields")
         self._save_btn        = self._tool_btn("💾  Save Template",           self._on_save_template)
@@ -268,6 +284,7 @@ class TemplateEditorView(QWidget):
         row1.addWidget(self._add_btn)
         row1.addWidget(self._add_chart_btn)
         row1.addWidget(self._add_badge_btn)
+        row1.addWidget(self._add_photo_btn)
         row1.addStretch()
         row1.addWidget(self._export_excel_btn)
         row1.addWidget(self._save_btn)
@@ -413,6 +430,20 @@ class TemplateEditorView(QWidget):
             lambda col, op, val: self._change_property(self._selected_item, "rule", (col, op, val))
         )
 
+        # ── Photo-only signals ──────────────────────────────────────────
+        p.photo_id_column_changed.connect(
+            lambda col: self._change_property(self._selected_item, "photo_id_column", col)
+        )
+        p.photo_border_color_changed.connect(
+            lambda col: self._change_property(self._selected_item, "border_color", col)
+        )
+        p.photo_border_width_changed.connect(
+            lambda w: self._change_property(self._selected_item, "border_width", w)
+        )
+        p.photo_corner_radius_changed.connect(
+            lambda r: self._change_property(self._selected_item, "corner_radius", r)
+        )
+
     # ── Public API ────────────────────────────────────────────────────────────
 
     def set_excel_columns(self, headers: list[str]) -> None:
@@ -433,6 +464,7 @@ class TemplateEditorView(QWidget):
         self._add_btn.setEnabled(not locked)
         self._add_chart_btn.setEnabled(not locked)
         self._add_badge_btn.setEnabled(not locked)
+        self._add_photo_btn.setEnabled(not locked)
         self._bg_btn.setEnabled(not locked)
         if locked:
             self._lock_badge.setText(f"🔒 {reason or 'Template Locked (Dataset Active)'}")
@@ -443,11 +475,8 @@ class TemplateEditorView(QWidget):
     def has_unsaved_changes(self) -> bool:
         return self._has_unsaved_changes
 
-    def get_state(self) -> dict:
-        return self._get_state()
-
     def get_template_fields(self) -> list[str]:
-        """Return list of all field labels in canvas order (chart items excluded)."""
+        """Return list of all field labels in canvas order (chart/badge/photo items excluded)."""
         return [f.label for f in self._field_items]
 
     def _update_snap_btn_style(self) -> None:
@@ -477,8 +506,13 @@ class TemplateEditorView(QWidget):
         for item in self._all_canvas_items():
             item.set_snap_to_grid(checked, 10.0)
 
-    def _all_canvas_items(self) -> list[FieldItem | ChartItem | BadgeItem]:
-        return list(self._field_items) + list(self._chart_items) + list(self._badge_items)
+    def _all_canvas_items(self) -> list[FieldItem | ChartItem | BadgeItem | PhotoItem]:
+        return (
+            list(self._field_items)
+            + list(self._chart_items)
+            + list(self._badge_items)
+            + list(self._photo_items)
+        )
 
     def _on_undo_clean_changed(self, clean: bool) -> None:
         self._has_unsaved_changes = not clean
@@ -598,6 +632,39 @@ class TemplateEditorView(QWidget):
 
         self._undo_stack.push(AddItemCommand(self, item, item_type="badge"))
 
+    def _on_add_photo(self) -> None:
+        if self._is_locked:
+            QMessageBox.warning(self, "Template Locked", "Cannot add photos while a dataset is active.")
+            return
+
+        self._photo_counter += 1
+        rect = self._scene.sceneRect()
+        cx = rect.center().x() - 45
+        cy = rect.center().y() - 55
+        if self._snap_to_grid:
+            cx = round(cx / 10.0) * 10.0
+            cy = round(cy / 10.0) * 10.0
+
+        item = PhotoItem(
+            label=f"Student Photo {self._photo_counter}",
+            x=cx, y=cy, width=90, height=110,
+        )
+        item.set_snap_to_grid(self._snap_to_grid, 10.0)
+        if self._excel_headers:
+            # Look for common ID headers
+            for cand in ["Enrollment number", "Enrollment", "Roll No", "ID", "Student ID", "Admission No"]:
+                matched = find_matching_header(cand, self._excel_headers)
+                if matched:
+                    item.set_photo_id_column(matched)
+                    break
+
+        item.position_changed.connect(lambda x, y, it=item: self._on_item_moved(it, x, y))
+        item.geometry_changed.connect(lambda w, h, it=item: self._on_item_resized(it, w, h))
+        item.move_committed.connect(lambda it, op, np: self._on_item_move_committed(it, op, np))
+        item.resize_committed.connect(lambda it, ow, oh, nw, nh: self._on_item_resize_committed(it, ow, oh, nw, nh))
+
+        self._undo_stack.push(AddItemCommand(self, item, item_type="photo"))
+
     def _on_label_changed(self, new_label: str) -> None:
         if not isinstance(self._selected_item, FieldItem):
             return
@@ -627,6 +694,8 @@ class TemplateEditorView(QWidget):
             item_type = "chart"
         elif isinstance(item, BadgeItem):
             item_type = "badge"
+        elif isinstance(item, PhotoItem):
+            item_type = "photo"
 
         self._undo_stack.push(DeleteItemCommand(self, item, item_type=item_type))
 
@@ -738,6 +807,9 @@ class TemplateEditorView(QWidget):
             except Exception as exc:
                 QMessageBox.critical(self, "Load Error", f"Failed to load template:\n{exc}")
 
+    def get_state(self) -> dict:
+        return self._get_state()
+
     def _get_state(self) -> dict:
         r = self._scene.sceneRect()
         return {
@@ -753,6 +825,7 @@ class TemplateEditorView(QWidget):
             "fields": [f.to_dict() for f in self._field_items],
             "charts": [c.to_dict() for c in self._chart_items],
             "badges": [b.to_dict() for b in self._badge_items],
+            "photos": [p.to_dict() for p in self._photo_items],
         }
 
     def _restore_state(self, d: dict) -> None:
@@ -770,6 +843,11 @@ class TemplateEditorView(QWidget):
         for b in self._badge_items:
             self._scene.removeItem(b)
         self._badge_items.clear()
+
+        # Clear photos
+        for p_item in self._photo_items:
+            self._scene.removeItem(p_item)
+        self._photo_items.clear()
 
         self._selected_item = None
         self._panel.load_item(None)
@@ -820,6 +898,17 @@ class TemplateEditorView(QWidget):
             self._scene.addItem(item)
             self._badge_items.append(item)
 
+        # Photos
+        for pd in d.get("photos", []):
+            item = PhotoItem.from_dict(pd)
+            item.set_snap_to_grid(self._snap_to_grid, 10.0)
+            item.position_changed.connect(lambda x, y, it=item: self._on_item_moved(it, x, y))
+            item.geometry_changed.connect(lambda w, h, it=item: self._on_item_resized(it, w, h))
+            item.move_committed.connect(lambda it, op, np: self._on_item_move_committed(it, op, np))
+            item.resize_committed.connect(lambda it, ow, oh, nw, nh: self._on_item_resize_committed(it, ow, oh, nw, nh))
+            self._scene.addItem(item)
+            self._photo_items.append(item)
+
         self._undo_stack.clear()
         self._fit_to_view()
 
@@ -851,9 +940,9 @@ class TemplateEditorView(QWidget):
             self._align_right_btn.setEnabled(count >= 2)
             self._distribute_v_btn.setEnabled(count >= 3)
 
-    def _selected_canvas_items(self) -> list[FieldItem | ChartItem | BadgeItem]:
+    def _selected_canvas_items(self) -> list[FieldItem | ChartItem | BadgeItem | PhotoItem]:
         sel = self._scene.selectedItems()
-        return [i for i in sel if isinstance(i, (FieldItem, ChartItem, BadgeItem))]
+        return [i for i in sel if isinstance(i, (FieldItem, ChartItem, BadgeItem, PhotoItem))]
 
     # ── Alignment Actions ─────────────────────────────────────────────────────
 
@@ -946,12 +1035,12 @@ class TemplateEditorView(QWidget):
         if moves:
             self._undo_stack.push(MoveMultipleItemsCommand(self, moves, text="Distribute Vertically"))
 
-    def _on_item_moved(self, item: FieldItem | ChartItem | BadgeItem, x: float, y: float) -> None:
+    def _on_item_moved(self, item: FieldItem | ChartItem | BadgeItem | PhotoItem, x: float, y: float) -> None:
         if item is self._selected_item:
             self._panel.update_position(x, y)
         self._mark_dirty()
 
-    def _on_item_resized(self, item: FieldItem | ChartItem | BadgeItem, w: float, h: float) -> None:
+    def _on_item_resized(self, item: FieldItem | ChartItem | BadgeItem | PhotoItem, w: float, h: float) -> None:
         if item is self._selected_item:
             self._panel.update_geometry(w, h)
         self._mark_dirty()
@@ -999,6 +1088,12 @@ class TemplateEditorView(QWidget):
     def _apply_to_badge(self, fn) -> None:
         """Apply fn only when selected item is a BadgeItem."""
         if isinstance(self._selected_item, BadgeItem):
+            fn(self._selected_item)
+            self._mark_dirty()
+
+    def _apply_to_photo(self, fn) -> None:
+        """Apply fn only when selected item is a PhotoItem."""
+        if isinstance(self._selected_item, PhotoItem):
             fn(self._selected_item)
             self._mark_dirty()
 
