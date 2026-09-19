@@ -44,6 +44,7 @@ class FieldItem(QGraphicsObject):
         self.label: str = label
         self.mapped_column: str = ""
         self.is_unique: bool = False
+        self.page: int = 1
 
         # Typography
         self.font_family: str = "Segoe UI"
@@ -318,6 +319,7 @@ class FieldItem(QGraphicsObject):
             "multiline"    : self.multiline,
             "alignment"    : self.alignment,
             "v_alignment"  : self.v_alignment,
+            "page"         : getattr(self, "page", 1),
         }
 
     @classmethod
@@ -331,6 +333,7 @@ class FieldItem(QGraphicsObject):
         )
         item.mapped_column = d.get("mapped_column", "")
         item.is_unique     = d.get("is_unique",     False)
+        item.page          = int(d.get("page", 1))
         item.font_family   = d.get("font_family",   "Segoe UI")
         item.font_size     = d.get("font_size",      12)
         item.color         = d.get("color",          "#000000")

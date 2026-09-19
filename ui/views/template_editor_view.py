@@ -127,6 +127,12 @@ class TemplateEditorView(QWidget):
         self._has_unsaved_changes: bool = False
         self._is_locked: bool = False
         self._snap_to_grid: bool = True
+        self._current_page: int = 1
+        self._num_pages: int = 1
+        self._page_backgrounds: dict[int, dict[str, Any]] = {
+            1: {"type": "", "path": "", "pixmap": None},
+            2: {"type": "", "path": "", "pixmap": None},
+        }
 
         # Undo / Redo Architecture
         self._undo_stack = QUndoStack(self)
@@ -236,6 +242,22 @@ class TemplateEditorView(QWidget):
         self._lock_badge.hide()
         row1.addWidget(self._lock_badge)
 
+        row1.addSpacing(6)
+
+        # Multi-page view toggle: [ Page 1 ] [ Page 2 ]
+        self._page1_btn = QPushButton("📄 Page 1")
+        self._page2_btn = QPushButton("📄 Page 2")
+        for p_btn in (self._page1_btn, self._page2_btn):
+            p_btn.setCheckable(True)
+            p_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            p_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        self._page1_btn.setChecked(True)
+        self._page1_btn.clicked.connect(lambda: self.switch_page(1))
+        self._page2_btn.clicked.connect(lambda: self.switch_page(2))
+        self._update_page_toggle_styles()
+
+        row1.addWidget(self._page1_btn)
+        row1.addWidget(self._page2_btn)
         row1.addSpacing(8)
 
         # Action Buttons
@@ -446,6 +468,7 @@ class TemplateEditorView(QWidget):
         p.y_changed.connect(self._on_panel_y)
         p.width_changed.connect(self._on_panel_width)
         p.height_changed.connect(self._on_panel_height)
+        p.page_changed.connect(self._on_item_page_changed)
         p.delete_requested.connect(self._on_delete_selected)
 
         # ── Chart-only signals ──────────────────────────────────────────
@@ -552,6 +575,91 @@ class TemplateEditorView(QWidget):
         """Return list of all field labels in canvas order (chart/badge/photo items excluded)."""
         return [f.label for f in self._field_items]
 
+    def _update_page_toggle_styles(self) -> None:
+        if not hasattr(self, "_page1_btn") or not hasattr(self, "_page2_btn"):
+            return
+        active_style = """
+            QPushButton {
+                background: #2563eb; color: #ffffff; border: 1px solid #1d4ed8;
+                border-radius: 4px; padding: 4px 10px; font-size: 12px; font-weight: 700;
+                min-height: 20px;
+            }
+            QPushButton:hover { background: #1d4ed8; }
+        """
+        inactive_style = """
+            QPushButton {
+                background: #ffffff; color: #4b5563; border: 1px solid #d1d5db;
+                border-radius: 4px; padding: 4px 10px; font-size: 12px; font-weight: 500;
+                min-height: 20px;
+            }
+            QPushButton:hover { background: #f3f4f6; color: #111827; }
+        """
+        if self._current_page == 1:
+            self._page1_btn.setChecked(True)
+            self._page1_btn.setStyleSheet(active_style)
+            self._page2_btn.setChecked(False)
+            self._page2_btn.setStyleSheet(inactive_style)
+        else:
+            self._page1_btn.setChecked(False)
+            self._page1_btn.setStyleSheet(inactive_style)
+            self._page2_btn.setChecked(True)
+            self._page2_btn.setStyleSheet(active_style)
+
+    def switch_page(self, page_number: int) -> None:
+        """Switch active canvas view between Page 1 (Front) and Page 2 (Back)."""
+        if page_number not in (1, 2):
+            return
+        self._current_page = page_number
+        if page_number == 2 and self._num_pages < 2:
+            self._num_pages = 2
+
+        self._update_page_toggle_styles()
+
+        # Clear active selection and panel
+        self._scene.clearSelection()
+        self._selected_item = None
+        self._panel.load_item(None)
+
+        # Update item visibility based on page
+        for item in self._all_canvas_items():
+            item.setVisible(getattr(item, "page", 1) == page_number)
+
+        # Update background on canvas
+        if self._bg_item:
+            self._scene.removeItem(self._bg_item)
+            self._bg_item = None
+
+        bg_info = self._page_backgrounds.get(page_number, {})
+        pixmap = bg_info.get("pixmap")
+        if pixmap and not pixmap.isNull():
+            self._bg_item = QGraphicsPixmapItem(pixmap)
+            self._bg_item.setZValue(0)
+            self._scene.addItem(self._bg_item)
+            self._scene.setSceneRect(QRectF(pixmap.rect()))
+            self._bg_type = bg_info.get("type", "")
+            self._bg_path = bg_info.get("path", "")
+        else:
+            p1_pix = self._page_backgrounds.get(1, {}).get("pixmap")
+            if p1_pix and not p1_pix.isNull():
+                self._scene.setSceneRect(QRectF(p1_pix.rect()))
+            else:
+                self._scene.setSceneRect(QRectF(0, 0, 794, 1123))
+            self._bg_type = ""
+            self._bg_path = ""
+
+        self._fit_to_view()
+
+    def _on_item_page_changed(self, new_page: int) -> None:
+        if not self._selected_item:
+            return
+        old_page = getattr(self._selected_item, "page", 1)
+        if old_page != new_page:
+            self._selected_item.page = new_page
+            if new_page == 2 and self._num_pages < 2:
+                self._num_pages = 2
+            self._selected_item.setVisible(new_page == self._current_page)
+            self._mark_dirty()
+
     def _update_snap_btn_style(self) -> None:
         if hasattr(self, "_snap_btn"):
             if self._snap_btn.isChecked():
@@ -638,6 +746,7 @@ class TemplateEditorView(QWidget):
             cy = round(cy / 10.0) * 10.0
 
         item = FieldItem(label=name, x=cx, y=cy, width=200, height=36)
+        item.page = self._current_page
         item.set_snap_to_grid(self._snap_to_grid, 10.0)
         if self._excel_headers:
             matched = find_matching_header(name, self._excel_headers)
@@ -668,6 +777,7 @@ class TemplateEditorView(QWidget):
             label=f"Performance Chart {self._chart_counter}",
             x=cx, y=cy, width=300, height=200,
         )
+        item.page = self._current_page
         item.set_snap_to_grid(self._snap_to_grid, 10.0)
         if self._excel_headers:
             item.chart_columns = list(self._excel_headers)
@@ -696,6 +806,7 @@ class TemplateEditorView(QWidget):
             label=f"Badge {self._badge_counter}",
             x=cx, y=cy, width=100, height=100,
         )
+        item.page = self._current_page
         item.set_snap_to_grid(self._snap_to_grid, 10.0)
         if self._excel_headers:
             item.rule_column = self._excel_headers[0]
@@ -724,6 +835,7 @@ class TemplateEditorView(QWidget):
             label=f"Student Photo {self._photo_counter}",
             x=cx, y=cy, width=90, height=110,
         )
+        item.page = self._current_page
         item.set_snap_to_grid(self._snap_to_grid, 10.0)
         if self._excel_headers:
             # Look for common ID headers
@@ -757,6 +869,7 @@ class TemplateEditorView(QWidget):
             label=f"QR Code {self._qr_counter}",
             x=cx, y=cy, width=80, height=80,
         )
+        item.page = self._current_page
         item.set_snap_to_grid(self._snap_to_grid, 10.0)
 
         item.position_changed.connect(lambda x, y, it=item: self._on_item_moved(it, x, y))
@@ -783,6 +896,7 @@ class TemplateEditorView(QWidget):
             label=f"Subject Table {self._table_counter}",
             x=cx, y=cy, width=400, height=140,
         )
+        item.page = self._current_page
         item.set_snap_to_grid(self._snap_to_grid, 10.0)
 
         # Pre-select subject columns if available
@@ -867,18 +981,47 @@ class TemplateEditorView(QWidget):
     def _load_background_file(self, path: str) -> None:
         if path.lower().endswith(".pdf"):
             doc = pymupdf.open(path)
-            page = doc[0]
-            pix = page.get_pixmap(dpi=150)
-            qpix = QPixmap()
-            qpix.loadFromData(pix.tobytes("png"))
-            doc.close()
-            self._set_background(qpix, "pdf", path)
+            try:
+                if self._current_page == 1 and doc.page_count >= 2:
+                    p0 = doc[0]
+                    pix0 = p0.get_pixmap(dpi=150)
+                    qpix0 = QPixmap()
+                    qpix0.loadFromData(pix0.tobytes("png"))
+
+                    p1 = doc[1]
+                    pix1 = p1.get_pixmap(dpi=150)
+                    qpix1 = QPixmap()
+                    qpix1.loadFromData(pix1.tobytes("png"))
+
+                    self._page_backgrounds[1] = {"type": "pdf", "path": path, "pixmap": qpix0, "page_index": 0}
+                    self._page_backgrounds[2] = {"type": "pdf", "path": path, "pixmap": qpix1, "page_index": 1}
+                    self._num_pages = 2
+                    self._set_background(qpix0, "pdf", path, page_num=1)
+                else:
+                    page_idx = min(self._current_page - 1, doc.page_count - 1)
+                    page = doc[page_idx]
+                    pix = page.get_pixmap(dpi=150)
+                    qpix = QPixmap()
+                    qpix.loadFromData(pix.tobytes("png"))
+                    self._page_backgrounds[self._current_page] = {
+                        "type": "pdf", "path": path, "pixmap": qpix, "page_index": page_idx
+                    }
+                    if self._current_page == 2:
+                        self._num_pages = 2
+                    self._set_background(qpix, "pdf", path, page_num=self._current_page)
+            finally:
+                doc.close()
         else:
             qpix = QPixmap(path)
             if not qpix.isNull():
-                self._set_background(qpix, "image", path)
+                self._page_backgrounds[self._current_page] = {
+                    "type": "image", "path": path, "pixmap": qpix
+                }
+                if self._current_page == 2:
+                    self._num_pages = 2
+                self._set_background(qpix, "image", path, page_num=self._current_page)
 
-    def _set_background(self, pixmap: QPixmap, bg_type: str, path: str) -> None:
+    def _set_background(self, pixmap: QPixmap, bg_type: str, path: str, page_num: int = 1) -> None:
         if self._bg_item:
             self._scene.removeItem(self._bg_item)
             self._bg_item = None
@@ -889,6 +1032,11 @@ class TemplateEditorView(QWidget):
         self._scene.setSceneRect(QRectF(pixmap.rect()))
         self._bg_type = bg_type
         self._bg_path = path
+        self._page_backgrounds[page_num] = {
+            "type": bg_type,
+            "path": path,
+            "pixmap": pixmap,
+        }
         self._fit_to_view()
 
     def _on_export_excel(self) -> None:
@@ -961,16 +1109,32 @@ class TemplateEditorView(QWidget):
 
     def _get_state(self) -> dict:
         r = self._scene.sceneRect()
+        has_page_2 = (
+            self._num_pages >= 2
+            or any(getattr(it, "page", 1) == 2 for it in self._all_canvas_items())
+            or bool(self._page_backgrounds.get(2, {}).get("path"))
+        )
+        num_pages = 2 if has_page_2 else 1
+
+        bg1 = {
+            "type": self._page_backgrounds.get(1, {}).get("type", self._bg_type),
+            "path": self._page_backgrounds.get(1, {}).get("path", self._bg_path),
+        }
+        bg2 = {
+            "type": self._page_backgrounds.get(2, {}).get("type", ""),
+            "path": self._page_backgrounds.get(2, {}).get("path", ""),
+        }
+
         return {
             "version"      : "1.0",
             "template_id"  : self._template_id,
             "template_name": self._template_name,
+            "num_pages"    : num_pages,
             "canvas_width" : round(r.width(),  2),
             "canvas_height": round(r.height(), 2),
-            "background": {
-                "type": self._bg_type,
-                "path": self._bg_path,
-            },
+            "background"   : bg1,
+            "background_page2": bg2,
+            "backgrounds"  : [bg1, bg2] if num_pages >= 2 else [bg1],
             "fields": [f.to_dict() for f in self._field_items],
             "charts": [c.to_dict() for c in self._chart_items],
             "badges": [b.to_dict() for b in self._badge_items],
@@ -1016,8 +1180,15 @@ class TemplateEditorView(QWidget):
 
         self._template_id   = d.get("template_id",   str(uuid.uuid4()))
         self._template_name = d.get("template_name", "Template")
+        self._num_pages     = int(d.get("num_pages", 1))
 
-        # Background
+        # Reset page backgrounds
+        self._page_backgrounds = {
+            1: {"type": "", "path": "", "pixmap": None},
+            2: {"type": "", "path": "", "pixmap": None},
+        }
+
+        # Background Page 1
         bg      = d.get("background", {})
         bg_path = bg.get("path", "")
         if bg_path and os.path.exists(bg_path):
@@ -1027,9 +1198,33 @@ class TemplateEditorView(QWidget):
             h = d.get("canvas_height", 1123.0)
             self._scene.setSceneRect(0, 0, w, h)
 
+        # Background Page 2 (if specified separately)
+        bg2 = d.get("background_page2", {})
+        if not bg2.get("path") and len(d.get("backgrounds", [])) > 1:
+            bg2 = d.get("backgrounds")[1]
+        bg2_path = bg2.get("path", "")
+        if bg2_path and os.path.exists(bg2_path):
+            if bg2_path.lower().endswith(".pdf"):
+                doc2 = pymupdf.open(bg2_path)
+                p_idx = int(bg2.get("page_index", 0))
+                p_idx = min(p_idx, doc2.page_count - 1)
+                pix2 = doc2[p_idx].get_pixmap(dpi=150)
+                qpix2 = QPixmap()
+                qpix2.loadFromData(pix2.tobytes("png"))
+                doc2.close()
+                self._page_backgrounds[2] = {"type": "pdf", "path": bg2_path, "pixmap": qpix2, "page_index": p_idx}
+            else:
+                qpix2 = QPixmap(bg2_path)
+                if not qpix2.isNull():
+                    self._page_backgrounds[2] = {"type": "image", "path": bg2_path, "pixmap": qpix2}
+            self._num_pages = 2
+
         # Fields
         for fd in d.get("fields", []):
             item = FieldItem.from_dict(fd)
+            item.page = int(fd.get("page", 1))
+            if item.page == 2:
+                self._num_pages = 2
             item.set_snap_to_grid(self._snap_to_grid, 10.0)
             item.position_changed.connect(lambda x, y, it=item: self._on_item_moved(it, x, y))
             item.geometry_changed.connect(lambda w, h, it=item: self._on_item_resized(it, w, h))
@@ -1041,6 +1236,9 @@ class TemplateEditorView(QWidget):
         # Charts
         for cd in d.get("charts", []):
             item = ChartItem.from_dict(cd)
+            item.page = int(cd.get("page", 1))
+            if item.page == 2:
+                self._num_pages = 2
             item.set_snap_to_grid(self._snap_to_grid, 10.0)
             item.position_changed.connect(lambda x, y, it=item: self._on_item_moved(it, x, y))
             item.geometry_changed.connect(lambda w, h, it=item: self._on_item_resized(it, w, h))
@@ -1052,6 +1250,9 @@ class TemplateEditorView(QWidget):
         # Badges
         for bd in d.get("badges", []):
             item = BadgeItem.from_dict(bd)
+            item.page = int(bd.get("page", 1))
+            if item.page == 2:
+                self._num_pages = 2
             item.set_snap_to_grid(self._snap_to_grid, 10.0)
             item.position_changed.connect(lambda x, y, it=item: self._on_item_moved(it, x, y))
             item.geometry_changed.connect(lambda w, h, it=item: self._on_item_resized(it, w, h))
@@ -1063,6 +1264,9 @@ class TemplateEditorView(QWidget):
         # Photos
         for pd in d.get("photos", []):
             item = PhotoItem.from_dict(pd)
+            item.page = int(pd.get("page", 1))
+            if item.page == 2:
+                self._num_pages = 2
             item.set_snap_to_grid(self._snap_to_grid, 10.0)
             item.position_changed.connect(lambda x, y, it=item: self._on_item_moved(it, x, y))
             item.geometry_changed.connect(lambda w, h, it=item: self._on_item_resized(it, w, h))
@@ -1074,6 +1278,9 @@ class TemplateEditorView(QWidget):
         # QR codes
         for qd in (d.get("qr_codes") or d.get("qrs") or []):
             item = QRItem.from_dict(qd)
+            item.page = int(qd.get("page", 1))
+            if item.page == 2:
+                self._num_pages = 2
             item.set_snap_to_grid(self._snap_to_grid, 10.0)
             item.position_changed.connect(lambda x, y, it=item: self._on_item_moved(it, x, y))
             item.geometry_changed.connect(lambda w, h, it=item: self._on_item_resized(it, w, h))
@@ -1085,6 +1292,9 @@ class TemplateEditorView(QWidget):
         # Dynamic Subject Tables
         for td in d.get("tables", []):
             item = TableItem.from_dict(td)
+            item.page = int(td.get("page", 1))
+            if item.page == 2:
+                self._num_pages = 2
             item.set_snap_to_grid(self._snap_to_grid, 10.0)
             item.position_changed.connect(lambda x, y, it=item: self._on_item_moved(it, x, y))
             item.geometry_changed.connect(lambda w, h, it=item: self._on_item_resized(it, w, h))
@@ -1094,7 +1304,7 @@ class TemplateEditorView(QWidget):
             self._table_items.append(item)
 
         self._undo_stack.clear()
-        self._fit_to_view()
+        self.switch_page(1)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 

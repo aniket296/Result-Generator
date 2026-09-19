@@ -57,6 +57,7 @@ class TableItem(QGraphicsObject):
         self.show_grade: bool = show_grade
         self.max_marks: float = max_marks
         self.row_height: float = max(12.0, float(row_height))
+        self.page: int = 1
         self.font_size: int = max(6, int(font_size))
         self.header_bg: str = header_bg
         self.header_color: str = header_color
@@ -342,11 +343,12 @@ class TableItem(QGraphicsObject):
             "y"               : round(self.pos().y(), 2),
             "width"           : round(self._width, 2),
             "height"          : round(self._height, 2),
+            "page"            : getattr(self, "page", 1),
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "TableItem":
-        return cls(
+        item = cls(
             label           = d.get("label", "Subject Marks Table"),
             x               = float(d.get("x", 50.0)),
             y               = float(d.get("y", 200.0)),
@@ -363,4 +365,6 @@ class TableItem(QGraphicsObject):
             alt_row_bg      = d.get("alt_row_bg", "#f8fafc"),
             border_color    = d.get("border_color", "#cbd5e1"),
         )
+        item.page = int(d.get("page", 1))
+        return item
 

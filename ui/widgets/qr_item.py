@@ -48,6 +48,7 @@ class QRItem(QGraphicsObject):
         self.label: str = label
         self.qr_payload: str = qr_payload
         self.border_cells: int = max(0, int(border_cells))
+        self.page: int = 1
 
         # Geometry
         self._width: float = max(30.0, width)
@@ -268,11 +269,12 @@ class QRItem(QGraphicsObject):
             "y"                   : round(self.pos().y(), 2),
             "width"               : round(self._width, 2),
             "height"              : round(self._height, 2),
+            "page"                : getattr(self, "page", 1),
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "QRItem":
-        return cls(
+        item = cls(
             label         = d.get("label", "QR Code"),
             x             = float(d.get("x", 100.0)),
             y             = float(d.get("y", 100.0)),
@@ -281,4 +283,6 @@ class QRItem(QGraphicsObject):
             qr_payload    = d.get("qr_payload_template", d.get("qr_payload", DEFAULT_QR_PAYLOAD)),
             border_cells  = int(d.get("border_cells", 1)),
         )
+        item.page = int(d.get("page", 1))
+        return item
 

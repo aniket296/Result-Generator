@@ -41,6 +41,7 @@ class BadgeItem(QGraphicsObject):
         super().__init__(parent)
 
         self.label: str = label
+        self.page: int = 1
 
         # Badge image
         self.badge_image_path: str         = ""
@@ -272,6 +273,7 @@ class BadgeItem(QGraphicsObject):
             "y"               : round(p.y(), 2),
             "width"           : round(self._width,  2),
             "height"          : round(self._height, 2),
+            "page"            : getattr(self, "page", 1),
         }
 
     @classmethod
@@ -287,6 +289,7 @@ class BadgeItem(QGraphicsObject):
         item.rule_column   = d.get("rule_column",   "")
         item.rule_operator = d.get("rule_operator", ">=")
         item.rule_value    = d.get("rule_value",    "0")
+        item.page          = int(d.get("page", 1))
         return item
 
     # ── Helpers ───────────────────────────────────────────────────────────────

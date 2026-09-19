@@ -118,6 +118,7 @@ class AddItemCommand(QUndoCommand):
     def redo(self) -> None:
         if not self.item.scene():
             self.editor._scene.addItem(self.item)
+        self.item.setVisible(getattr(self.item, "page", 1) == getattr(self.editor, "_current_page", 1))
 
         if self.item_type == "field" and self.item not in self.editor._field_items:
             self.editor._field_items.append(self.item)
@@ -156,6 +157,7 @@ class DeleteItemCommand(QUndoCommand):
     def undo(self) -> None:
         if not self.item.scene():
             self.editor._scene.addItem(self.item)
+        self.item.setVisible(getattr(self.item, "page", 1) == getattr(self.editor, "_current_page", 1))
 
         if self.item_type == "field" and self.item not in self.editor._field_items:
             self.editor._field_items.append(self.item)

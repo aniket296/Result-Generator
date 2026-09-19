@@ -927,9 +927,39 @@ def generate_single_pdf(
     Renders one single student record onto the template background
     and saves the resulting flattened PDF.
     """
+    num_pages = int(template_state.get("num_pages", 1))
     bg_info = template_state.get("background", {})
     bg_path = bg_info.get("path", "")
     bg_type = bg_info.get("type", "image")
+
+    bg2_info = template_state.get("background_page2", {})
+    bg2_path = bg2_info.get("path", "")
+    bg2_type = bg2_info.get("type", "image")
+
+    backgrounds = template_state.get("backgrounds", [])
+    if len(backgrounds) > 1 and not bg2_path:
+        bg2_path = backgrounds[1].get("path", "")
+        bg2_type = backgrounds[1].get("type", "image")
+
+    has_page_2 = any(
+        int(item.get("page", 1)) == 2
+        for cat in ("fields", "charts", "badges", "photos", "qr_codes", "tables")
+        for item in template_state.get(cat, [])
+    )
+
+    is_multi_page_pdf = False
+    if bg_path and os.path.exists(bg_path) and bg_type == "pdf":
+        try:
+            chk = pymupdf.open(bg_path)
+            if chk.page_count >= 2:
+                is_multi_page_pdf = True
+                num_pages = max(num_pages, 2)
+            chk.close()
+        except Exception:
+            pass
+
+    if has_page_2 or (bg2_path and os.path.exists(bg2_path)):
+        num_pages = max(num_pages, 2)
 
     canvas_w = float(template_state.get("canvas_width", 794.0))
     canvas_h = float(template_state.get("canvas_height", 1123.0))
@@ -938,6 +968,7 @@ def generate_single_pdf(
 
     doc = pymupdf.open()
 
+    # --- Page 1 (Front) ---
     if bg_path and os.path.exists(bg_path):
         if bg_type == "pdf":
             src_doc = pymupdf.open(bg_path)
@@ -945,36 +976,61 @@ def generate_single_pdf(
                 doc.insert_pdf(src_doc, from_page=0, to_page=0)
             finally:
                 src_doc.close()
-            page = doc[0]
         else:
-            # High-res image background
-            page = doc.new_page(width=canvas_w, height=canvas_h)
-            rect = pymupdf.Rect(0, 0, canvas_w, canvas_h)
-            page.insert_image(rect, filename=bg_path)
+            page1 = doc.new_page(width=canvas_w, height=canvas_h)
+            page1.insert_image(pymupdf.Rect(0, 0, canvas_w, canvas_h), filename=bg_path)
     else:
-        page = doc.new_page(width=canvas_w, height=canvas_h)
+        doc.new_page(width=canvas_w, height=canvas_h)
 
-    page_rect = page.rect
-    scale_x = page_rect.width / max(1.0, canvas_w)
-    scale_y = page_rect.height / max(1.0, canvas_h)
+    # --- Page 2 (Back) ---
+    if num_pages >= 2:
+        if is_multi_page_pdf:
+            src_doc = pymupdf.open(bg_path)
+            try:
+                doc.insert_pdf(src_doc, from_page=1, to_page=1)
+            finally:
+                src_doc.close()
+        elif bg2_path and os.path.exists(bg2_path):
+            if bg2_type == "pdf":
+                src_doc2 = pymupdf.open(bg2_path)
+                try:
+                    p_idx2 = int(bg2_info.get("page_index", 0))
+                    p_idx2 = min(p_idx2, src_doc2.page_count - 1)
+                    doc.insert_pdf(src_doc2, from_page=p_idx2, to_page=p_idx2)
+                finally:
+                    src_doc2.close()
+            else:
+                page2 = doc.new_page(width=canvas_w, height=canvas_h)
+                page2.insert_image(pymupdf.Rect(0, 0, canvas_w, canvas_h), filename=bg2_path)
+        else:
+            doc.new_page(width=canvas_w, height=canvas_h)
+
+    def _resolve_item_page(item_spec: dict[str, Any]) -> tuple[pymupdf.Page, float, float, int]:
+        target_p = int(item_spec.get("page", 1))
+        page_idx = min(max(0, target_p - 1), doc.page_count - 1)
+        target_pg = doc[page_idx]
+        sx = target_pg.rect.width / max(1.0, canvas_w)
+        sy = target_pg.rect.height / max(1.0, canvas_h)
+        return target_pg, sx, sy, page_idx
 
     # ── Compute Dynamic Subject Table metrics & push-down offsets ────────────
     tables = template_state.get("tables", [])
-    table_render_data: list[tuple[float, float, float, list[dict[str, Any]]]] = []
+    table_render_data: list[tuple[int, float, float, float, list[dict[str, Any]]]] = []
 
     for t_spec in tables:
         subjs = _extract_student_subjects(t_spec, row_data)
+        _, t_sx, t_sy, t_page_idx = _resolve_item_page(t_spec)
         tx0, ty0, tw, t_tot_h, t_head_h, t_row_h, t_delta_h = _calculate_table_metrics(
-            t_spec, subjs, scale_x, scale_y
+            t_spec, subjs, t_sx, t_sy
         )
-        t_init_h = max(40.0, float(t_spec.get("height", 140.0)) * scale_y)
-        table_render_data.append((ty0, t_init_h, t_delta_h, subjs))
+        t_init_h = max(40.0, float(t_spec.get("height", 140.0)) * t_sy)
+        table_render_data.append((t_page_idx, ty0, t_init_h, t_delta_h, subjs))
 
-    def _get_table_push_down(elem_y: float) -> float:
-        """Calculate downward shift for any element positioned below expanding tables."""
+    def _get_table_push_down(elem_y: float, elem_page_idx: int) -> float:
+        """Calculate downward shift for any element positioned below expanding tables on the same page."""
         total_shift = 0.0
-        for (t_y0, t_init_h, d_h, _) in table_render_data:
-            if elem_y >= (t_y0 + t_init_h - 5.0):
+        for (t_p_idx, t_y0, t_init_h, d_h, _) in table_render_data:
+            if t_p_idx == elem_page_idx and elem_y >= (t_y0 + t_init_h - 5.0):
                 total_shift += d_h
         return total_shift
 
@@ -983,6 +1039,8 @@ def generate_single_pdf(
     for f in fields:
         col_key = f.get("mapped_column") or f.get("label", "")
         text_val = _extract_field_value(f, row_data)
+        page, scale_x, scale_y, page_idx = _resolve_item_page(f)
+        page_rect = page.rect
 
         # Coordinates mapped to PDF points with top-edge protection
         x0 = max(0.0, float(f.get("x", 0.0)) * scale_x)
@@ -990,8 +1048,8 @@ def generate_single_pdf(
         w  = max(10.0, float(f.get("width", 100.0)) * scale_x)
         h  = max(10.0, float(f.get("height", 30.0)) * scale_y)
 
-        # Apply dynamic table expansion offset if below an expanding table
-        y0 = min(y0 + _get_table_push_down(y0), max(0.0, page_rect.height - h - 5.0))
+        # Apply dynamic table expansion offset if below an expanding table on the same page
+        y0 = min(y0 + _get_table_push_down(y0, page_idx), max(0.0, page_rect.height - h - 5.0))
         x0 = min(x0, max(0.0, page_rect.width - 5.0))
 
         # Ensure field is within bounds and not clipped off top/left
@@ -1002,7 +1060,7 @@ def generate_single_pdf(
         color = _hex_to_rgb_float(f.get("color", "#000000"))
 
         # Console Debugging: Right before the PyMuPDF insert loop
-        print(f"[DEBUG PDF] Field: '{col_key}' | Pos: ({x0:.1f}, {y0:.1f}) | Dim: ({w:.1f}, {h:.1f}) | Value: '{text_val}'")
+        print(f"[DEBUG PDF] Field: '{col_key}' (P{page_idx+1}) | Pos: ({x0:.1f}, {y0:.1f}) | Dim: ({w:.1f}, {h:.1f}) | Value: '{text_val}'")
 
         if not text_val:
             continue
@@ -1115,17 +1173,19 @@ def generate_single_pdf(
     charts = template_state.get("charts", [])
     for chart_spec in charts:
         col_key     = chart_spec.get("label", "Performance Chart")
+        page, scale_x, scale_y, page_idx = _resolve_item_page(chart_spec)
+        page_rect   = page.rect
         cx0         = max(0.0, float(chart_spec.get("x",      0.0)) * scale_x)
         cy0         = max(0.0, float(chart_spec.get("y",      0.0)) * scale_y)
         cw          = max(10.0, float(chart_spec.get("width",  300.0)) * scale_x)
         ch          = max(10.0, float(chart_spec.get("height", 200.0)) * scale_y)
 
-        cy0 = min(cy0 + _get_table_push_down(cy0), max(0.0, page_rect.height - ch - 5.0))
+        cy0 = min(cy0 + _get_table_push_down(cy0, page_idx), max(0.0, page_rect.height - ch - 5.0))
         cx0 = min(cx0, max(0.0, page_rect.width - 5.0))
         chart_rect = pymupdf.Rect(cx0, cy0, cx0 + cw, cy0 + ch)
 
         print(
-            f"[DEBUG CHART] '{col_key}' | Pos: ({cx0:.1f}, {cy0:.1f}) "
+            f"[DEBUG CHART] '{col_key}' (P{page_idx+1}) | Pos: ({cx0:.1f}, {cy0:.1f}) "
             f"| Dim: ({cw:.1f}×{ch:.1f}) | Cols: {chart_spec.get('chart_columns', [])}"
         )
 
@@ -1145,18 +1205,20 @@ def generate_single_pdf(
         rule_op    = badge_spec.get("rule_operator", ">=")
         rule_val   = badge_spec.get("rule_value", "0")
 
+        page, scale_x, scale_y, page_idx = _resolve_item_page(badge_spec)
+        page_rect  = page.rect
         bx0 = max(0.0, float(badge_spec.get("x",      0.0)) * scale_x)
         by0 = max(0.0, float(badge_spec.get("y",      0.0)) * scale_y)
         bw  = max(10.0, float(badge_spec.get("width",  100.0)) * scale_x)
         bh  = max(10.0, float(badge_spec.get("height", 100.0)) * scale_y)
 
-        by0 = min(by0 + _get_table_push_down(by0), max(0.0, page_rect.height - bh - 5.0))
+        by0 = min(by0 + _get_table_push_down(by0, page_idx), max(0.0, page_rect.height - bh - 5.0))
         bx0 = min(bx0, max(0.0, page_rect.width - 5.0))
         badge_rect = pymupdf.Rect(bx0, by0, bx0 + bw, by0 + bh)
 
         is_match = _evaluate_badge_rule(rule_col, rule_op, rule_val, row_data)
         print(
-            f"[DEBUG BADGE] '{label}' | Rule: '{rule_col}' {rule_op} '{rule_val}' "
+            f"[DEBUG BADGE] '{label}' (P{page_idx+1}) | Rule: '{rule_col}' {rule_op} '{rule_val}' "
             f"| Match: {is_match} | Pos: ({bx0:.1f}, {by0:.1f}) | File: '{badge_path}'"
         )
 
@@ -1196,12 +1258,14 @@ def generate_single_pdf(
                         if id_val and id_val.lower() not in ("nan", "none", "<na>"):
                             break
 
+            page, scale_x, scale_y, page_idx = _resolve_item_page(photo_spec)
+            page_rect = page.rect
             px0 = max(0.0, float(photo_spec.get("x", 0.0)) * scale_x)
             py0 = max(0.0, float(photo_spec.get("y", 0.0)) * scale_y)
             pw  = max(10.0, float(photo_spec.get("width", 90.0)) * scale_x)
             ph  = max(10.0, float(photo_spec.get("height", 110.0)) * scale_y)
 
-            py0 = min(py0 + _get_table_push_down(py0), max(0.0, page_rect.height - ph - 5.0))
+            py0 = min(py0 + _get_table_push_down(py0, page_idx), max(0.0, page_rect.height - ph - 5.0))
             px0 = min(px0, max(0.0, page_rect.width - 5.0))
 
             photo_rect = pymupdf.Rect(px0, py0, px0 + pw, py0 + ph)
@@ -1211,7 +1275,7 @@ def generate_single_pdf(
             border_c = _hex_to_rgb_float(photo_spec.get("border_color", "#6b7280"))
 
             print(
-                f"[DEBUG PHOTO] '{label}' | ID: '{id_val}' | File: '{photo_file}' "
+                f"[DEBUG PHOTO] '{label}' (P{page_idx+1}) | ID: '{id_val}' | File: '{photo_file}' "
                 f"| Pos: ({px0:.1f}, {py0:.1f}) | Dim: ({pw:.1f}×{ph:.1f})"
             )
 
@@ -1251,19 +1315,21 @@ def generate_single_pdf(
         payload_template = qr_spec.get("qr_payload_template") or qr_spec.get("qr_payload", "")
         border_cells = int(qr_spec.get("border_cells", 1))
 
+        page, scale_x, scale_y, page_idx = _resolve_item_page(qr_spec)
+        page_rect = page.rect
         qx0 = max(0.0, float(qr_spec.get("x", 0.0)) * scale_x)
         qy0 = max(0.0, float(qr_spec.get("y", 0.0)) * scale_y)
         qw  = max(10.0, float(qr_spec.get("width", 80.0)) * scale_x)
         qh  = max(10.0, float(qr_spec.get("height", 80.0)) * scale_y)
 
-        qy0 = min(qy0 + _get_table_push_down(qy0), max(0.0, page_rect.height - qh - 5.0))
+        qy0 = min(qy0 + _get_table_push_down(qy0, page_idx), max(0.0, page_rect.height - qh - 5.0))
         qx0 = min(qx0, max(0.0, page_rect.width - 5.0))
 
         qr_rect = pymupdf.Rect(qx0, qy0, qx0 + qw, qy0 + qh)
         interpolated_payload = _interpolate_qr_payload(payload_template, row_data)
 
         print(
-            f"[DEBUG QR] '{label}' | Payload: '{interpolated_payload}' "
+            f"[DEBUG QR] '{label}' (P{page_idx+1}) | Payload: '{interpolated_payload}' "
             f"| Pos: ({qx0:.1f}, {qy0:.1f}) | Dim: ({qw:.1f}×{qh:.1f})"
         )
 
@@ -1281,13 +1347,14 @@ def generate_single_pdf(
 
     # ── Render Dynamic Variable-Row Subject Tables ────────────────────────────
     for idx, t_spec in enumerate(tables):
+        page, scale_x, scale_y, page_idx = _resolve_item_page(t_spec)
         if idx < len(table_render_data):
-            ty0, _, _, subjs = table_render_data[idx]
+            _, ty0, _, _, subjs = table_render_data[idx]
         else:
             subjs = _extract_student_subjects(t_spec, row_data)
             ty0 = max(0.0, float(t_spec.get("y", 0.0)) * scale_y)
 
-        t_shift = _get_table_push_down(ty0)
+        t_shift = _get_table_push_down(ty0, page_idx)
         _render_dynamic_subject_table(page, t_spec, subjs, scale_x, scale_y, y_offset=t_shift)
 
     # Stamp internal template identity in metadata

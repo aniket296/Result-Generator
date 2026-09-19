@@ -45,6 +45,7 @@ class PhotoItem(QGraphicsObject):
 
         self.label: str = label
         self.photo_id_column: str = photo_id_column
+        self.page: int = 1
 
         # Visual styling
         self.border_color: str = border_color
@@ -282,6 +283,7 @@ class PhotoItem(QGraphicsObject):
             "y": round(p.y(), 2),
             "width": round(self._width, 2),
             "height": round(self._height, 2),
+            "page": getattr(self, "page", 1),
         }
 
     @classmethod
@@ -297,6 +299,7 @@ class PhotoItem(QGraphicsObject):
             border_width=d.get("border_width", 1.0),
             corner_radius=d.get("corner_radius", 4.0),
         )
+        item.page = int(d.get("page", 1))
         return item
 
     # ── Helpers ───────────────────────────────────────────────────────────────

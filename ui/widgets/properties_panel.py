@@ -72,6 +72,7 @@ class PropertiesPanel(QWidget):
     y_changed        = pyqtSignal(float)
     width_changed    = pyqtSignal(float)
     height_changed   = pyqtSignal(float)
+    page_changed     = pyqtSignal(int)
     delete_requested = pyqtSignal()
 
     # ── Signals (ChartItem) ───────────────────────────────────────────────────
@@ -186,6 +187,10 @@ class PropertiesPanel(QWidget):
             self._y_spin.setValue(int(p.y()))
             self._w_spin.setValue(int(item.width))
             self._h_spin.setValue(int(item.height))
+
+            p_idx = self._page_combo.findData(getattr(item, "page", 1))
+            if p_idx >= 0:
+                self._page_combo.setCurrentIndex(p_idx)
 
             if isinstance(item, ChartItem):
                 # ── Chart mode ──
@@ -956,6 +961,25 @@ class PropertiesPanel(QWidget):
         wh.addWidget(self._caption("H:"))
         wh.addWidget(self._h_spin)
         layout.addLayout(wh)
+
+        page_box = QHBoxLayout()
+        page_box.setSpacing(6)
+        self._page_combo = QComboBox()
+        self._page_combo.addItem("Page 1 (Front)", 1)
+        self._page_combo.addItem("Page 2 (Back)", 2)
+        self._page_combo.setStyleSheet("""
+            QComboBox {
+                background: #ffffff; border: 1px solid #d1d5db; border-radius: 4px;
+                padding: 4px 8px; font-size: 12px; color: #1f2937;
+            }
+            QComboBox:focus { border-color: #3b82f6; }
+        """)
+        self._page_combo.currentIndexChanged.connect(
+            lambda: self._live(lambda: self.page_changed.emit(int(self._page_combo.currentData() or 1)))
+        )
+        page_box.addWidget(self._caption("Page:"))
+        page_box.addWidget(self._page_combo)
+        layout.addLayout(page_box)
 
     def _build_actions_section(self, layout: QVBoxLayout) -> None:
         layout.addSpacing(12)

@@ -45,6 +45,7 @@ class ChartItem(QGraphicsObject):
         self.label: str = label
         self.chart_columns: list[str] = []
         self.chart_style: str = "vertical"   # "vertical" | "horizontal"
+        self.page: int = 1
 
         # Geometry
         self._width:  float = max(80.0, width)
@@ -273,6 +274,7 @@ class ChartItem(QGraphicsObject):
             "y"            : round(p.y(), 2),
             "width"        : round(self._width, 2),
             "height"       : round(self._height, 2),
+            "page"         : getattr(self, "page", 1),
         }
 
     @classmethod
@@ -286,6 +288,7 @@ class ChartItem(QGraphicsObject):
         )
         item.chart_columns = list(d.get("chart_columns", []))
         item.chart_style   = d.get("chart_style", "vertical")
+        item.page          = int(d.get("page", 1))
         return item
 
     # ── Helpers ───────────────────────────────────────────────────────────────
