@@ -14,6 +14,7 @@ Features:
 """
 from __future__ import annotations
 
+import math
 import re
 from typing import Any, Sequence
 import pandas as pd
@@ -160,13 +161,22 @@ def calculate_grade(
         tuple[str, float]: (letter_grade, grade_point), e.g. ("A1", 10.0)
     """
     try:
-        if isinstance(score, str):
-            clean_str = re.sub(r'[^\d.]', '', score.strip())
+        if score is None:
+            return ("N/A", 0.0)
+        if isinstance(score, (int, float)):
+            if math.isnan(score) or math.isinf(score):
+                return ("N/A", 0.0)
+            val = float(score)
+        else:
+            s = str(score).strip()
+            if s.lower() in ("nan", "none", "<na>", "null", "n/a", ""):
+                return ("N/A", 0.0)
+            clean_str = re.sub(r'[^\d.]', '', s)
             if not clean_str:
                 return ("N/A", 0.0)
             val = float(clean_str)
-        else:
-            val = float(score)
+            if math.isnan(val) or math.isinf(val):
+                return ("N/A", 0.0)
     except (ValueError, TypeError):
         return ("N/A", 0.0)
 
@@ -181,11 +191,14 @@ def calculate_grade(
 
     matrix = grade_matrix or GRADE_PRESETS.get(preset.upper(), CBSE_GRADE_MATRIX)
 
-    for bracket in matrix:
+    for i, bracket in enumerate(matrix):
         min_p = float(bracket["min_pct"])
         max_p = float(bracket["max_pct"])
-        # Support both floating point inclusive edge cases
+        # Support both floating point inclusive edge cases and micro-gap below higher bracket
         if min_p <= pct <= max_p or (pct >= min_p and bracket is matrix[0]):
+            return (str(bracket["grade"]), float(bracket["grade_point"]))
+        next_min = float(matrix[i - 1]["min_pct"]) if i > 0 else 100.0
+        if min_p <= pct < next_min:
             return (str(bracket["grade"]), float(bracket["grade_point"]))
 
     # Fallback to the lowest bracket if not matched
@@ -208,11 +221,20 @@ def calculate_cgpa_from_percentage(
         float: CGPA rounded to 2 decimal places (0.0 to 10.0).
     """
     try:
-        if isinstance(percentage, str):
-            clean_str = re.sub(r'[^\d.]', '', percentage.strip())
-            pct = float(clean_str) if clean_str else 0.0
-        else:
+        if percentage is None:
+            return 0.0
+        if isinstance(percentage, (int, float)):
+            if math.isnan(percentage) or math.isinf(percentage):
+                return 0.0
             pct = float(percentage)
+        else:
+            s = str(percentage).strip()
+            if s.lower() in ("nan", "none", "<na>", "null", "n/a", ""):
+                return 0.0
+            clean_str = re.sub(r'[^\d.]', '', s)
+            pct = float(clean_str) if clean_str else 0.0
+            if math.isnan(pct) or math.isinf(pct):
+                return 0.0
     except (ValueError, TypeError):
         return 0.0
 
@@ -229,13 +251,25 @@ def calculate_cgpa_from_percentage(
 
 def cgpa_to_percentage(cgpa: float | int | str) -> float:
     """
-    Convert a 10-Point CGPA to its approximate percentage using standard CBSE formula (CGPA * 9.5).
+    Convert a CGPA value into an approximate percentage using the standard CBSE multiplier (9.5).
     """
     try:
-        val = float(cgpa)
+        if cgpa is None:
+            return 0.0
+        if isinstance(cgpa, (int, float)):
+            if math.isnan(cgpa) or math.isinf(cgpa):
+                return 0.0
+            val = float(cgpa)
+        else:
+            clean_str = re.sub(r'[^\d.]', '', str(cgpa).strip())
+            val = float(clean_str) if clean_str else 0.0
+            if math.isnan(val) or math.isinf(val):
+                return 0.0
     except (ValueError, TypeError):
         return 0.0
-    return round(min(100.0, max(0.0, val * 9.5)), 2)
+
+    pct = val * 9.5
+    return round(min(100.0, max(0.0, pct)), 2)
 
 
 def evaluate_result_status(
@@ -255,11 +289,20 @@ def evaluate_result_status(
         str: "PASSED" or "FAILED"
     """
     try:
-        if isinstance(score, str):
-            clean_str = re.sub(r'[^\d.]', '', score.strip())
-            val = float(clean_str) if clean_str else 0.0
-        else:
+        if score is None:
+            return "FAILED"
+        if isinstance(score, (int, float)):
+            if math.isnan(score) or math.isinf(score):
+                return "FAILED"
             val = float(score)
+        else:
+            s = str(score).strip()
+            if s.lower() in ("nan", "none", "<na>", "null", "n/a", ""):
+                return "FAILED"
+            clean_str = re.sub(r'[^\d.]', '', s)
+            val = float(clean_str) if clean_str else 0.0
+            if math.isnan(val) or math.isinf(val):
+                return "FAILED"
     except (ValueError, TypeError):
         return "FAILED"
 
@@ -350,13 +393,20 @@ def _parse_float(val: Any) -> float | None:
     if val is None:
         return None
     if isinstance(val, (int, float)):
+        if math.isnan(val) or math.isinf(val):
+            return None
         return float(val)
     s = str(val).strip()
+    if s.lower() in ("nan", "none", "<na>", "null", "n/a", ""):
+        return None
     clean = re.sub(r'[^\d.]', '', s)
     if not clean:
         return None
     try:
-        return float(clean)
+        f = float(clean)
+        if math.isnan(f) or math.isinf(f):
+            return None
+        return f
     except ValueError:
         return None
 

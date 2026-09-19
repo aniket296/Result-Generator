@@ -68,6 +68,7 @@ def sanitize_filename_part(text: str) -> str:
     - Collapse consecutive underscores to a single '_'
     - Remove path traversal dot segments
     - Strip leading/trailing underscores, spaces, and periods
+    - Cap length to 80 characters
     """
     if not text:
         return "UNNAMED"
@@ -79,6 +80,9 @@ def sanitize_filename_part(text: str) -> str:
     # Collapse multiple underscores/spaces
     cleaned = re.sub(r'[\s_]+', '_', cleaned)
     cleaned = cleaned.strip(" ._")
+
+    if len(cleaned) > 80:
+        cleaned = cleaned[:80].strip(" ._")
 
     return cleaned if cleaned else "UNNAMED"
 
@@ -96,6 +100,7 @@ def format_filename_from_pattern(
     - Strips illegal Windows filename characters (\\ / : * ? " < > |).
     - Falls back safely to index naming (e.g. REC{row_index}) if a column value is missing or blank.
     - Enforces reserved Windows device name protection and uppercase extension.
+    - Caps total base name length to 120 characters to prevent path length exhaustion.
     """
     raw_pattern = (pattern or default_pattern).strip()
     if raw_pattern.lower().endswith(".pdf"):
@@ -133,8 +138,12 @@ def format_filename_from_pattern(
 
     # Sanitize literal characters outside tokens
     result_base = re.sub(r'[\\/:*?"<>|\x00-\x1f]', '_', result_base)
+    result_base = re.sub(r'\.{2,}', '_', result_base)
     result_base = re.sub(r'[\s_]+', '_', result_base)
     result_base = result_base.strip(" ._")
+
+    if len(result_base) > 120:
+        result_base = result_base[:120].strip(" ._")
 
     if not result_base:
         result_base = f"RESULT_{row_index}"
@@ -142,8 +151,8 @@ def format_filename_from_pattern(
     result_base = result_base.upper()
 
     # Reserved names check
-    first_token = result_base.split("_")[0]
-    if first_token in RESERVED_WINDOWS_NAMES:
+    first_token = result_base.split("_")[0].split(".")[0]
+    if first_token in RESERVED_WINDOWS_NAMES or result_base in RESERVED_WINDOWS_NAMES:
         result_base = f"RESULT_{result_base}"
 
     ext_clean = ext.upper() if ext.startswith(".") else f".{ext.upper()}"
@@ -162,6 +171,7 @@ def get_unique_result_filename(
     """
     Constructs the exact uppercase filename with collision handling (_01, _02, ..., _100)
     and reserved name protection. Supports tokenized dynamic pattern when pattern and row_data are given.
+    Guarantees strict directory confinement within output_dir.
     """
     if pattern and row_data is not None:
         filename = format_filename_from_pattern(pattern, row_data, row_index=row_index, ext=ext)
@@ -174,14 +184,29 @@ def get_unique_result_filename(
 
         base_name = f"{u}_{s}".upper()
 
+        if len(base_name) > 120:
+            base_name = base_name[:120].strip(" ._")
+
         # Reserved names check
-        first_token = base_name.split("_")[0]
-        if first_token in RESERVED_WINDOWS_NAMES:
+        first_token = base_name.split("_")[0].split(".")[0]
+        if first_token in RESERVED_WINDOWS_NAMES or base_name in RESERVED_WINDOWS_NAMES:
             base_name = f"RESULT_{base_name}"
 
         file_ext = ext.upper() if ext.startswith(".") else f".{ext.upper()}"
 
-    candidate_path = os.path.join(output_dir, f"{base_name}{file_ext}")
+    # Strip any directory components from base_name for absolute path confinement
+    clean_file = f"{os.path.basename(base_name)}{file_ext}"
+    candidate_path = os.path.normpath(os.path.join(output_dir, clean_file))
+
+    # Confinement assertion
+    abs_out = os.path.abspath(output_dir)
+    abs_cand = os.path.abspath(candidate_path)
+    try:
+        if os.path.commonpath([abs_out, abs_cand]) != abs_out:
+            candidate_path = os.path.normpath(os.path.join(output_dir, f"SAFE_{os.path.basename(clean_file)}"))
+    except Exception:
+        candidate_path = os.path.normpath(os.path.join(output_dir, f"SAFE_{os.path.basename(clean_file)}"))
+
     if not os.path.exists(candidate_path):
         return candidate_path
 
@@ -189,7 +214,7 @@ def get_unique_result_filename(
     counter = 1
     while True:
         suffix = f"_{counter:02d}" if counter < 100 else f"_{counter}"
-        candidate_path = os.path.join(output_dir, f"{base_name}{suffix}{file_ext}")
+        candidate_path = os.path.normpath(os.path.join(output_dir, f"{os.path.basename(base_name)}{suffix}{file_ext}"))
         if not os.path.exists(candidate_path):
             return candidate_path
         counter += 1
@@ -1281,18 +1306,24 @@ def generate_single_pdf(
                 f"| Pos: ({px0:.1f}, {py0:.1f}) | Dim: ({pw:.1f}×{ph:.1f})"
             )
 
+            photo_rendered = False
             if photo_file and os.path.exists(photo_file):
                 try:
-                    page.insert_image(photo_rect, filename=photo_file, keep_proportion=True)
-                    if border_w > 0:
-                        try:
-                            page.draw_rect(photo_rect, color=border_c, width=border_w)
-                        except Exception:
-                            pass
+                    if os.path.getsize(photo_file) > 0:
+                        page.insert_image(photo_rect, filename=photo_file, keep_proportion=True)
+                        if border_w > 0:
+                            try:
+                                page.draw_rect(photo_rect, color=border_c, width=border_w)
+                            except Exception:
+                                pass
+                        photo_rendered = True
+                    else:
+                        print(f"[WARNING PHOTO] Zero-byte blank image file for '{label}' (File: {photo_file})")
                 except Exception as p_err:
-                    print(f"[DEBUG PHOTO] Insert error for '{label}' (File: {photo_file}): {p_err}")
-            else:
-                # Graceful missing photo handling: Draw a clean subtle neutral placeholder box
+                    print(f"[WARNING PHOTO] Corrupt or unreadable image file for '{label}' (File: {photo_file}): {p_err}")
+
+            if not photo_rendered:
+                # Graceful missing, zero-byte, or corrupt photo handling: Draw a clean subtle neutral placeholder box
                 try:
                     page.draw_rect(
                         photo_rect,
@@ -1940,7 +1971,7 @@ class GeneratorWorker(QThread):
                 self.record_succeeded.emit(row_num, out_file)
                 self._log(f"Generated: {filename_only}")
                 idx += 1
-            except PermissionError as exc:
+            except (PermissionError, OSError) as exc:
                 error_message = str(exc)
                 self.failed_records.append({
                     "student_name": row.get(self.name_col, "Unknown"),
@@ -1954,6 +1985,22 @@ class GeneratorWorker(QThread):
                 self._log(f"Skipped row {row_num}: {error_message}")
                 idx += 1
             except Exception as exc:
+                err_str = str(exc).lower()
+                if "permission denied" in err_str or "access is denied" in err_str or "cannot remove file" in err_str or "locked" in err_str:
+                    error_message = f"File Lock / Permission Denied: {exc}"
+                    self.failed_records.append({
+                        "student_name": row.get(self.name_col, "Unknown"),
+                        "unique_val": row.get(self.unique_col, f"Row {row_num}"),
+                        "error": error_message,
+                        "row_data": row,
+                        "row_index": idx,
+                    })
+                    skipped_count += 1
+                    self.record_skipped.emit(row_num, error_message)
+                    self._log(f"Skipped row {row_num}: {error_message}")
+                    idx += 1
+                    continue
+
                 self._mutex.lock()
                 self.error_occurred.emit(row_num, f"Render Error: {exc}", row, retries_left)
                 self._wait_condition.wait(self._mutex)
