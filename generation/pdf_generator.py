@@ -370,6 +370,85 @@ def _extract_field_value(f: dict[str, Any], row_data: dict[str, Any]) -> str:
     return s_val
 
 
+# ── Text Measurement & Auto-Shrink Font Helpers ───────────────────────────────
+
+def measure_text_width(text: str, font_name: str, font_size: float) -> float:
+    """
+    Measure the pixel/point width of a text string using PyMuPDF font metrics.
+    """
+    if not text:
+        return 0.0
+    return float(pymupdf.get_text_length(text, fontname=font_name, fontsize=font_size))
+
+
+def fit_single_line_font_size(
+    text: str,
+    font_name: str,
+    initial_size: float,
+    max_width: float,
+    min_size: float = 4.0,
+    step: float = 0.5,
+    padding: float = 2.0,
+) -> float:
+    """
+    Measure text pixel width against field box width and step down font size by 0.5pt increments
+    until the text fits comfortably inside the bounding box.
+    """
+    if not text or max_width <= 0:
+        return float(initial_size)
+
+    target_w = max(1.0, float(max_width) - float(padding) * 2.0)
+    cur_size = float(initial_size)
+
+    while cur_size > min_size:
+        w = measure_text_width(text, font_name, cur_size)
+        if w <= target_w:
+            return cur_size
+        cur_size = max(min_size, round(cur_size - step, 2))
+
+    return cur_size
+
+
+def fit_multiline_font_size(
+    rect: pymupdf.Rect,
+    text: str,
+    font_name: str,
+    initial_size: float,
+    min_size: float = 4.0,
+    step: float = 0.5,
+    align: int = 0,
+) -> float:
+    """
+    For multiline blocks (e.g. addresses, long remarks), determine font size by stepping down
+    by 0.5pt increments until the text fits comfortably inside the bounding box with word wrapping.
+    """
+    if not text or rect.width <= 0 or rect.height <= 0:
+        return float(initial_size)
+
+    cur_size = float(initial_size)
+    scratch_doc = pymupdf.open()
+    try:
+        scratch_page = scratch_doc.new_page(
+            width=max(rect.width + 100, 400),
+            height=max(rect.height + 100, 400),
+        )
+        test_rect = pymupdf.Rect(0, 0, rect.width, rect.height)
+        while cur_size > min_size:
+            rc = scratch_page.insert_textbox(
+                test_rect,
+                text,
+                fontsize=cur_size,
+                fontname=font_name,
+                align=align,
+            )
+            if rc >= 0:
+                return cur_size
+            cur_size = max(min_size, round(cur_size - step, 2))
+    finally:
+        scratch_doc.close()
+
+    return cur_size
+
 
 # ── Chart Image Renderer ──────────────────────────────────────────────────────
 
@@ -952,36 +1031,35 @@ def generate_single_pdf(
         else:
             font_name = "hebi" if (bold and italic) else ("hebo" if bold else ("heit" if italic else "helv"))
 
-        # Vertical alignment calculation
+        # Vertical alignment calculation & auto-shrink font fitting
         v_align = f.get("v_alignment", "Top")
         is_multiline = f.get("multiline", False)
         y_box_top = y0
 
         if not is_multiline:
+            # Single-line auto-shrink: step down by 0.5pt increments until it fits bounding box width
+            font_size = fit_single_line_font_size(
+                text_val, font_name, font_size, w, min_size=4.0, step=0.5, padding=2.0
+            )
             line_h = font_size * 1.15
             if v_align == "Middle":
                 y_box_top = y0 + max(0.0, (h - line_h) / 2.0)
             elif v_align == "Bottom":
                 y_box_top = y0 + max(0.0, h - line_h)
             effective_h = max(h - (y_box_top - y0), font_size * 1.5)
-        else:
-            effective_h = h
+            box_rect = pymupdf.Rect(x0, y_box_top, x0 + w, y_box_top + effective_h)
 
-        box_rect = pymupdf.Rect(x0, y_box_top, x0 + w, y_box_top + effective_h)
+            rc = page.insert_textbox(
+                box_rect,
+                text_val,
+                fontsize=font_size,
+                fontname=font_name,
+                color=color,
+                align=align_code,
+            )
 
-        # Insert textbox with PyMuPDF
-        rc = page.insert_textbox(
-            box_rect,
-            text_val,
-            fontsize=font_size,
-            fontname=font_name,
-            color=color,
-            align=align_code,
-        )
-
-        # Fallback if text overflowed the box (rc < 0): ensure it renders on the page
-        if rc < 0:
-            if not is_multiline:
+            # Fallback if text still overflowed the box (rc < 0): ensure it renders on the page
+            if rc < 0:
                 # Direct single-line text insertion fallback
                 if align_code == 1:
                     tlen = pymupdf.get_text_length(text_val, fontname=font_name, fontsize=font_size)
@@ -998,19 +1076,40 @@ def generate_single_pdf(
                     fontname=font_name,
                     color=color,
                 )
-            else:
-                # Try with smaller font size until it fits
-                for shrink in (0.85, 0.7, 0.55):
-                    alt_rc = page.insert_textbox(
-                        pymupdf.Rect(x0, y0, x0 + w, y0 + max(h, font_size * 2)),
-                        text_val,
-                        fontsize=font_size * shrink,
-                        fontname=font_name,
-                        color=color,
-                        align=align_code,
-                    )
-                    if alt_rc >= 0:
-                        break
+        else:
+            effective_h = h
+            box_rect = pymupdf.Rect(x0, y_box_top, x0 + w, y_box_top + effective_h)
+            cur_sz = font_size
+            rc = page.insert_textbox(
+                box_rect,
+                text_val,
+                fontsize=cur_sz,
+                fontname=font_name,
+                color=color,
+                align=align_code,
+            )
+            # Step down font size by 0.5pt increments until text fits inside bounding box
+            while rc < 0 and cur_sz > 4.0:
+                cur_sz = max(4.0, round(cur_sz - 0.5, 2))
+                rc = page.insert_textbox(
+                    box_rect,
+                    text_val,
+                    fontsize=cur_sz,
+                    fontname=font_name,
+                    color=color,
+                    align=align_code,
+                )
+            if rc < 0:
+                # Emergency fallback with min font size (4.0) with expanded boundary guard
+                alt_rect = pymupdf.Rect(x0, y0, x0 + w, y0 + max(h, 4.0 * 2))
+                page.insert_textbox(
+                    alt_rect,
+                    text_val,
+                    fontsize=4.0,
+                    fontname=font_name,
+                    color=color,
+                    align=align_code,
+                )
 
     # ── Render chart placeholders ─────────────────────────────────────────────
     charts = template_state.get("charts", [])
