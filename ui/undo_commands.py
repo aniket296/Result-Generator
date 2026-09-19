@@ -108,6 +108,8 @@ class AddItemCommand(QUndoCommand):
             self.editor._photo_items.remove(self.item)
         elif self.item_type == "qr" and self.item in self.editor._qr_items:
             self.editor._qr_items.remove(self.item)
+        elif self.item_type == "table" and self.item in self.editor._table_items:
+            self.editor._table_items.remove(self.item)
 
         self.editor._scene.clearSelection()
         if hasattr(self.editor, "_mark_dirty"):
@@ -127,6 +129,8 @@ class AddItemCommand(QUndoCommand):
             self.editor._photo_items.append(self.item)
         elif self.item_type == "qr" and self.item not in self.editor._qr_items:
             self.editor._qr_items.append(self.item)
+        elif self.item_type == "table" and self.item not in self.editor._table_items:
+            self.editor._table_items.append(self.item)
 
         self.editor._scene.clearSelection()
         self.item.setSelected(True)
@@ -163,6 +167,8 @@ class DeleteItemCommand(QUndoCommand):
             self.editor._photo_items.append(self.item)
         elif self.item_type == "qr" and self.item not in self.editor._qr_items:
             self.editor._qr_items.append(self.item)
+        elif self.item_type == "table" and self.item not in self.editor._table_items:
+            self.editor._table_items.append(self.item)
 
         self.editor._scene.clearSelection()
         self.item.setSelected(True)
@@ -183,6 +189,8 @@ class DeleteItemCommand(QUndoCommand):
             self.editor._photo_items.remove(self.item)
         elif self.item_type == "qr" and self.item in self.editor._qr_items:
             self.editor._qr_items.remove(self.item)
+        elif self.item_type == "table" and self.item in self.editor._table_items:
+            self.editor._table_items.remove(self.item)
 
         self.editor._scene.clearSelection()
         if hasattr(self.editor, "_mark_dirty"):
@@ -287,6 +295,22 @@ class ChangePropertyCommand(QUndoCommand):
             self.item.set_qr_payload(val)
         elif prop == "border_cells":
             self.item.set_border_cells(val)
+        elif prop == "subject_columns":
+            self.item.set_subject_columns(val)
+        elif prop == "show_max_marks":
+            self.item.set_show_max_marks(val)
+        elif prop == "show_grade":
+            self.item.set_show_grade(val)
+        elif prop == "max_marks":
+            self.item.set_max_marks(val)
+        elif prop == "row_height":
+            self.item.set_row_height(val)
+        elif prop == "header_bg":
+            self.item.set_header_bg(val)
+        elif prop == "header_color":
+            self.item.set_header_color(val)
+        elif prop == "alt_row_bg":
+            self.item.set_alt_row_bg(val)
 
         if hasattr(self.editor, "_selected_item") and self.editor._selected_item is self.item:
             self.editor._panel.load_item(self.item)

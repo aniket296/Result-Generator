@@ -53,6 +53,7 @@ from ui.widgets.chart_item import ChartItem
 from ui.widgets.field_item import FieldItem
 from ui.widgets.photo_item import PhotoItem
 from ui.widgets.qr_item import QRItem
+from ui.widgets.table_item import TableItem
 from ui.widgets.properties_panel import PropertiesPanel
 from utils.constants import TEMPLATES_DIR
 
@@ -110,15 +111,17 @@ class TemplateEditorView(QWidget):
         self._badge_items: list[BadgeItem] = []
         self._photo_items: list[PhotoItem] = []
         self._qr_items: list[QRItem] = []
+        self._table_items: list[TableItem] = []
         self._field_counter: int = 0
         self._chart_counter: int = 0
         self._badge_counter: int = 0
         self._photo_counter: int = 0
         self._qr_counter: int = 0
+        self._table_counter: int = 0
         self._bg_item: QGraphicsPixmapItem | None = None
         self._bg_type: str = ""
         self._bg_path: str = ""
-        self._selected_item: FieldItem | ChartItem | BadgeItem | PhotoItem | QRItem | None = None
+        self._selected_item: FieldItem | ChartItem | BadgeItem | PhotoItem | QRItem | TableItem | None = None
         self._excel_headers: list[str] = []
         self._initial_fit_done: bool = False
         self._has_unsaved_changes: bool = False
@@ -242,6 +245,7 @@ class TemplateEditorView(QWidget):
         self._add_badge_btn   = self._tool_btn("🎖  Add Badge",               self._on_add_badge)
         self._add_photo_btn   = self._tool_btn("📷  Add Photo",               self._on_add_photo)
         self._add_qr_btn      = self._tool_btn("🔲  Add QR",                  self._on_add_qr)
+        self._add_table_btn   = self._tool_btn("📋  Add Table",               self._on_add_table)
 
         # Style the Add Chart button distinctively
         self._add_chart_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
@@ -291,6 +295,18 @@ class TemplateEditorView(QWidget):
             QPushButton:disabled { background: #f9fafb; color: #9ca3af; border-color: #e5e7eb; }
         """)
 
+        # Style the Add Table button distinctively (purple/fuchsia)
+        self._add_table_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        self._add_table_btn.setStyleSheet("""
+            QPushButton {
+                background: #fdf4ff; color: #86198f; border: 1px solid #f0abfc;
+                border-radius: 4px; padding: 4px 10px; font-size: 12px; font-weight: 600;
+                min-height: 20px;
+            }
+            QPushButton:hover { background: #fae8ff; }
+            QPushButton:disabled { background: #f9fafb; color: #9ca3af; border-color: #e5e7eb; }
+        """)
+
         self._export_excel_btn = self._tool_btn("📊  Export Excel",            self._on_export_excel)
         self._export_excel_btn.setToolTip("Export empty Excel dataset template matching canvas fields")
         self._save_btn        = self._tool_btn("💾  Save Template",           self._on_save_template)
@@ -302,6 +318,7 @@ class TemplateEditorView(QWidget):
         row1.addWidget(self._add_badge_btn)
         row1.addWidget(self._add_photo_btn)
         row1.addWidget(self._add_qr_btn)
+        row1.addWidget(self._add_table_btn)
         row1.addStretch()
         row1.addWidget(self._export_excel_btn)
         row1.addWidget(self._save_btn)
@@ -469,6 +486,35 @@ class TemplateEditorView(QWidget):
             lambda cells: self._change_property(self._selected_item, "border_cells", cells)
         )
 
+        # ── Table-only signals ───────────────────────────────────────────
+        p.table_columns_changed.connect(
+            lambda cols: self._change_property(self._selected_item, "subject_columns", cols)
+        )
+        p.table_show_max_changed.connect(
+            lambda v: self._change_property(self._selected_item, "show_max_marks", v)
+        )
+        p.table_show_grade_changed.connect(
+            lambda v: self._change_property(self._selected_item, "show_grade", v)
+        )
+        p.table_max_marks_changed.connect(
+            lambda v: self._change_property(self._selected_item, "max_marks", v)
+        )
+        p.table_row_height_changed.connect(
+            lambda v: self._change_property(self._selected_item, "row_height", v)
+        )
+        p.table_font_size_changed.connect(
+            lambda v: self._change_property(self._selected_item, "font_size", v)
+        )
+        p.table_header_bg_changed.connect(
+            lambda c: self._change_property(self._selected_item, "header_bg", c)
+        )
+        p.table_header_color_changed.connect(
+            lambda c: self._change_property(self._selected_item, "header_color", c)
+        )
+        p.table_alt_row_bg_changed.connect(
+            lambda c: self._change_property(self._selected_item, "alt_row_bg", c)
+        )
+
     # ── Public API ────────────────────────────────────────────────────────────
 
     def set_excel_columns(self, headers: list[str]) -> None:
@@ -491,6 +537,7 @@ class TemplateEditorView(QWidget):
         self._add_badge_btn.setEnabled(not locked)
         self._add_photo_btn.setEnabled(not locked)
         self._add_qr_btn.setEnabled(not locked)
+        self._add_table_btn.setEnabled(not locked)
         self._bg_btn.setEnabled(not locked)
         if locked:
             self._lock_badge.setText(f"🔒 {reason or 'Template Locked (Dataset Active)'}")
@@ -532,13 +579,14 @@ class TemplateEditorView(QWidget):
         for item in self._all_canvas_items():
             item.set_snap_to_grid(checked, 10.0)
 
-    def _all_canvas_items(self) -> list[FieldItem | ChartItem | BadgeItem | PhotoItem | QRItem]:
+    def _all_canvas_items(self) -> list[FieldItem | ChartItem | BadgeItem | PhotoItem | QRItem | TableItem]:
         return (
             list(self._field_items)
             + list(self._chart_items)
             + list(self._badge_items)
             + list(self._photo_items)
             + list(self._qr_items)
+            + list(self._table_items)
         )
 
     def _on_undo_clean_changed(self, clean: bool) -> None:
@@ -718,6 +766,50 @@ class TemplateEditorView(QWidget):
 
         self._undo_stack.push(AddItemCommand(self, item, item_type="qr"))
 
+    def _on_add_table(self) -> None:
+        if self._is_locked:
+            QMessageBox.warning(self, "Template Locked", "Cannot add tables while a dataset is active.")
+            return
+
+        self._table_counter += 1
+        rect = self._scene.sceneRect()
+        cx = rect.center().x() - 200
+        cy = rect.center().y() - 70
+        if self._snap_to_grid:
+            cx = round(cx / 10.0) * 10.0
+            cy = round(cy / 10.0) * 10.0
+
+        item = TableItem(
+            label=f"Subject Table {self._table_counter}",
+            x=cx, y=cy, width=400, height=140,
+        )
+        item.set_snap_to_grid(self._snap_to_grid, 10.0)
+
+        # Pre-select subject columns if available
+        if self._excel_headers:
+            excluded = {
+                "name", "student", "student name", "roll", "roll no", "enrollment",
+                "id", "dob", "date of birth", "total", "percentage", "cgpa",
+                "grade", "rank", "result", "status", "calculated_grade",
+                "calculated_cgpa", "result_status", "class_rank", "percentile",
+                "remarks", "teacher_remarks"
+            }
+            subj_candidates = [
+                h for h in self._excel_headers
+                if h.strip().lower() not in excluded and not any(
+                    ex in h.strip().lower() for ex in ["photo", "qr", "remark", "signature"]
+                )
+            ]
+            if subj_candidates:
+                item.set_subject_columns(subj_candidates)
+
+        item.position_changed.connect(lambda x, y, it=item: self._on_item_moved(it, x, y))
+        item.geometry_changed.connect(lambda w, h, it=item: self._on_item_resized(it, w, h))
+        item.move_committed.connect(lambda it, op, np: self._on_item_move_committed(it, op, np))
+        item.resize_committed.connect(lambda it, ow, oh, nw, nh: self._on_item_resize_committed(it, ow, oh, nw, nh))
+
+        self._undo_stack.push(AddItemCommand(self, item, item_type="table"))
+
     def _on_label_changed(self, new_label: str) -> None:
         if not isinstance(self._selected_item, FieldItem):
             return
@@ -751,6 +843,8 @@ class TemplateEditorView(QWidget):
             item_type = "photo"
         elif isinstance(item, QRItem):
             item_type = "qr"
+        elif isinstance(item, TableItem):
+            item_type = "table"
 
         self._undo_stack.push(DeleteItemCommand(self, item, item_type=item_type))
 
@@ -883,6 +977,7 @@ class TemplateEditorView(QWidget):
             "photos": [p.to_dict() for p in self._photo_items],
             "qr_codes": [q.to_dict() for q in self._qr_items],
             "qrs"  : [q.to_dict() for q in self._qr_items],
+            "tables": [t.to_dict() for t in self._table_items],
         }
 
     def _restore_state(self, d: dict) -> None:
@@ -910,6 +1005,11 @@ class TemplateEditorView(QWidget):
         for q_item in self._qr_items:
             self._scene.removeItem(q_item)
         self._qr_items.clear()
+
+        # Clear tables
+        for t_item in self._table_items:
+            self._scene.removeItem(t_item)
+        self._table_items.clear()
 
         self._selected_item = None
         self._panel.load_item(None)
@@ -982,6 +1082,17 @@ class TemplateEditorView(QWidget):
             self._scene.addItem(item)
             self._qr_items.append(item)
 
+        # Dynamic Subject Tables
+        for td in d.get("tables", []):
+            item = TableItem.from_dict(td)
+            item.set_snap_to_grid(self._snap_to_grid, 10.0)
+            item.position_changed.connect(lambda x, y, it=item: self._on_item_moved(it, x, y))
+            item.geometry_changed.connect(lambda w, h, it=item: self._on_item_resized(it, w, h))
+            item.move_committed.connect(lambda it, op, np: self._on_item_move_committed(it, op, np))
+            item.resize_committed.connect(lambda it, ow, oh, nw, nh: self._on_item_resize_committed(it, ow, oh, nw, nh))
+            self._scene.addItem(item)
+            self._table_items.append(item)
+
         self._undo_stack.clear()
         self._fit_to_view()
 
@@ -1013,9 +1124,9 @@ class TemplateEditorView(QWidget):
             self._align_right_btn.setEnabled(count >= 2)
             self._distribute_v_btn.setEnabled(count >= 3)
 
-    def _selected_canvas_items(self) -> list[FieldItem | ChartItem | BadgeItem | PhotoItem | QRItem]:
+    def _selected_canvas_items(self) -> list[FieldItem | ChartItem | BadgeItem | PhotoItem | QRItem | TableItem]:
         sel = self._scene.selectedItems()
-        return [i for i in sel if isinstance(i, (FieldItem, ChartItem, BadgeItem, PhotoItem, QRItem))]
+        return [i for i in sel if isinstance(i, (FieldItem, ChartItem, BadgeItem, PhotoItem, QRItem, TableItem))]
 
     # ── Alignment Actions ─────────────────────────────────────────────────────
 

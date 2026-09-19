@@ -47,6 +47,7 @@ from ui.widgets.chart_item import ChartItem
 from ui.widgets.field_item import FieldItem
 from ui.widgets.photo_item import PhotoItem
 from ui.widgets.qr_item import QRItem
+from ui.widgets.table_item import TableItem
 
 
 class PropertiesPanel(QWidget):
@@ -91,16 +92,31 @@ class PropertiesPanel(QWidget):
     qr_payload_changed     = pyqtSignal(str)
     qr_border_cells_changed = pyqtSignal(int)
 
+    # ── Signals (TableItem) ──────────────────────────────────────────────────
+    table_columns_changed     = pyqtSignal(list)
+    table_show_max_changed    = pyqtSignal(bool)
+    table_show_grade_changed  = pyqtSignal(bool)
+    table_max_marks_changed   = pyqtSignal(float)
+    table_row_height_changed  = pyqtSignal(float)
+    table_font_size_changed   = pyqtSignal(int)
+    table_header_bg_changed   = pyqtSignal(str)
+    table_header_color_changed = pyqtSignal(str)
+    table_alt_row_bg_changed  = pyqtSignal(str)
+
     _NO_COL = "-- None (use Label) --"
     _AUTO_ID_COL = "-- Auto (Enrollment/Unique) --"
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self._item: FieldItem | ChartItem | BadgeItem | None = None
+        self._item: FieldItem | ChartItem | BadgeItem | PhotoItem | QRItem | TableItem | None = None
         self._updating: bool = False
         self._color_hex: str = "#000000"
+        self._table_header_bg_hex: str = "#1e3a8a"
+        self._table_header_color_hex: str = "#ffffff"
+        self._table_alt_row_bg_hex: str = "#f8fafc"
         self._excel_columns: list[str] = []
         self._chart_column_checkboxes: dict[str, QCheckBox] = {}
+        self._table_column_checkboxes: dict[str, QCheckBox] = {}
 
         self.setMinimumWidth(240)
         self.setMaximumWidth(360)
@@ -148,7 +164,10 @@ class PropertiesPanel(QWidget):
         self._photo_id_combo.setCurrentIndex(max(0, idx3))
         self._photo_id_combo.blockSignals(False)
 
-    def load_item(self, item: FieldItem | ChartItem | BadgeItem | PhotoItem | QRItem | None) -> None:
+        # Table: rebuild checkboxes
+        self._rebuild_table_checkboxes(columns)
+
+    def load_item(self, item: FieldItem | ChartItem | BadgeItem | PhotoItem | QRItem | TableItem | None) -> None:
         """Bind to the currently selected item, or show empty state."""
         self._item = item
         if item is None:
@@ -174,6 +193,7 @@ class PropertiesPanel(QWidget):
                 self._badge_container.hide()
                 self._photo_container.hide()
                 self._qr_container.hide()
+                self._table_container.hide()
                 self._chart_container.show()
                 self._panel_title.setText("Chart Properties")
 
@@ -193,6 +213,7 @@ class PropertiesPanel(QWidget):
                 self._chart_container.hide()
                 self._photo_container.hide()
                 self._qr_container.hide()
+                self._table_container.hide()
                 self._badge_container.show()
                 self._panel_title.setText("Badge Properties")
 
@@ -226,6 +247,7 @@ class PropertiesPanel(QWidget):
                 self._chart_container.hide()
                 self._badge_container.hide()
                 self._qr_container.hide()
+                self._table_container.hide()
                 self._photo_container.show()
                 self._panel_title.setText("Photo Properties")
 
@@ -247,6 +269,7 @@ class PropertiesPanel(QWidget):
                 self._chart_container.hide()
                 self._badge_container.hide()
                 self._photo_container.hide()
+                self._table_container.hide()
                 self._qr_container.show()
                 self._panel_title.setText("QR Code Properties")
 
@@ -260,12 +283,59 @@ class PropertiesPanel(QWidget):
                 self._qr_border_spin.setValue(item.border_cells)
                 self._qr_border_spin.blockSignals(False)
 
+            elif isinstance(item, TableItem):
+                # ── Dynamic Table mode ──
+                self._field_container.hide()
+                self._chart_container.hide()
+                self._badge_container.hide()
+                self._photo_container.hide()
+                self._qr_container.hide()
+                self._table_container.show()
+                self._panel_title.setText("Subject Table Properties")
+
+                # Checkboxes: update checked subject columns
+                for col, cb in self._table_column_checkboxes.items():
+                    cb.blockSignals(True)
+                    cb.setChecked(col in item.subject_columns)
+                    cb.blockSignals(False)
+
+                # Display options
+                self._table_show_max_cb.blockSignals(True)
+                self._table_show_max_cb.setChecked(item.show_max_marks)
+                self._table_show_max_cb.blockSignals(False)
+
+                self._table_show_grade_cb.blockSignals(True)
+                self._table_show_grade_cb.setChecked(item.show_grade)
+                self._table_show_grade_cb.blockSignals(False)
+
+                self._table_max_marks_spin.blockSignals(True)
+                self._table_max_marks_spin.setValue(int(item.max_marks))
+                self._table_max_marks_spin.blockSignals(False)
+
+                self._table_row_height_spin.blockSignals(True)
+                self._table_row_height_spin.setValue(int(item.row_height))
+                self._table_row_height_spin.blockSignals(False)
+
+                self._table_font_size_spin.blockSignals(True)
+                self._table_font_size_spin.setValue(int(item.font_size))
+                self._table_font_size_spin.blockSignals(False)
+
+                self._table_header_bg_hex = item.header_bg
+                self._sync_table_header_bg_btn()
+
+                self._table_header_color_hex = item.header_color
+                self._sync_table_header_color_btn()
+
+                self._table_alt_row_bg_hex = item.alt_row_bg
+                self._sync_table_alt_row_bg_btn()
+
             else:
                 # ── Field mode ──
                 self._chart_container.hide()
                 self._badge_container.hide()
                 self._photo_container.hide()
                 self._qr_container.hide()
+                self._table_container.hide()
                 self._field_container.show()
                 self._panel_title.setText("Field Properties")
 
@@ -397,6 +467,15 @@ class PropertiesPanel(QWidget):
         self._build_qr_section(qc_layout)
         self._form.addWidget(self._qr_container)
         self._qr_container.hide()
+
+        # ── Table-specific container ──────────────────────────────────────
+        self._table_container = QWidget()
+        tc_layout = QVBoxLayout(self._table_container)
+        tc_layout.setContentsMargins(0, 0, 0, 0)
+        tc_layout.setSpacing(8)
+        self._build_table_section(tc_layout)
+        self._form.addWidget(self._table_container)
+        self._table_container.hide()
 
         # ── Shared sections ──────────────────────────────────────────────
         self._build_geometry_section(self._form)
@@ -729,6 +808,119 @@ class PropertiesPanel(QWidget):
         bc_row.addWidget(self._qr_border_spin, stretch=1)
         layout.addLayout(bc_row)
 
+    def _build_table_section(self, layout: QVBoxLayout) -> None:
+        """Build Dynamic Subject Table configuration controls."""
+        layout.addWidget(self._section_lbl("Table Configuration"))
+
+        # Display checkboxes
+        self._table_show_max_cb = QCheckBox("Show Max Marks column")
+        self._table_show_max_cb.setChecked(True)
+        self._table_show_max_cb.setStyleSheet("font-size: 12px; color: #374151;")
+        self._table_show_max_cb.toggled.connect(
+            lambda v: self._table_live(lambda: self.table_show_max_changed.emit(v))
+        )
+        layout.addWidget(self._table_show_max_cb)
+
+        self._table_show_grade_cb = QCheckBox("Show Grade column")
+        self._table_show_grade_cb.setChecked(True)
+        self._table_show_grade_cb.setStyleSheet("font-size: 12px; color: #374151;")
+        self._table_show_grade_cb.toggled.connect(
+            lambda v: self._table_live(lambda: self.table_show_grade_changed.emit(v))
+        )
+        layout.addWidget(self._table_show_grade_cb)
+
+        # Max marks spinbox
+        mm_row = QHBoxLayout()
+        mm_row.setSpacing(6)
+        mm_row.addWidget(self._caption("Max Marks:"))
+        self._table_max_marks_spin = QSpinBox()
+        self._table_max_marks_spin.setRange(1, 1000)
+        self._table_max_marks_spin.setValue(100)
+        self._table_max_marks_spin.setStyleSheet(self._INPUT)
+        self._table_max_marks_spin.valueChanged.connect(
+            lambda v: self._table_live(lambda: self.table_max_marks_changed.emit(float(v)))
+        )
+        mm_row.addWidget(self._table_max_marks_spin, stretch=1)
+        layout.addLayout(mm_row)
+
+        # Row height & Font size
+        geom_row = QHBoxLayout()
+        geom_row.setSpacing(6)
+        geom_row.addWidget(self._caption("Row Height:"))
+        self._table_row_height_spin = QSpinBox()
+        self._table_row_height_spin.setRange(12, 60)
+        self._table_row_height_spin.setValue(22)
+        self._table_row_height_spin.setStyleSheet(self._INPUT)
+        self._table_row_height_spin.valueChanged.connect(
+            lambda v: self._table_live(lambda: self.table_row_height_changed.emit(float(v)))
+        )
+        geom_row.addWidget(self._table_row_height_spin, stretch=1)
+
+        geom_row.addWidget(self._caption("Font Size:"))
+        self._table_font_size_spin = QSpinBox()
+        self._table_font_size_spin.setRange(6, 24)
+        self._table_font_size_spin.setValue(9)
+        self._table_font_size_spin.setStyleSheet(self._INPUT)
+        self._table_font_size_spin.valueChanged.connect(
+            lambda v: self._table_live(lambda: self.table_font_size_changed.emit(v))
+        )
+        geom_row.addWidget(self._table_font_size_spin, stretch=1)
+        layout.addLayout(geom_row)
+
+        # Color controls: Header BG, Header Text, Alt Row BG
+        layout.addSpacing(4)
+        layout.addWidget(self._section_lbl("Table Colors"))
+        c_row = QHBoxLayout()
+        c_row.setSpacing(6)
+
+        self._table_header_bg_btn = QPushButton()
+        self._table_header_bg_btn.setFixedSize(28, 24)
+        self._table_header_bg_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._table_header_bg_btn.setToolTip("Header Background Color")
+        self._table_header_bg_btn.clicked.connect(self._on_table_header_bg_clicked)
+
+        self._table_header_color_btn = QPushButton()
+        self._table_header_color_btn.setFixedSize(28, 24)
+        self._table_header_color_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._table_header_color_btn.setToolTip("Header Text Color")
+        self._table_header_color_btn.clicked.connect(self._on_table_header_color_clicked)
+
+        self._table_alt_row_bg_btn = QPushButton()
+        self._table_alt_row_bg_btn.setFixedSize(28, 24)
+        self._table_alt_row_bg_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._table_alt_row_bg_btn.setToolTip("Alternate Row Fill Color")
+        self._table_alt_row_bg_btn.clicked.connect(self._on_table_alt_row_bg_clicked)
+
+        self._sync_table_header_bg_btn()
+        self._sync_table_header_color_btn()
+        self._sync_table_alt_row_bg_btn()
+
+        c_row.addWidget(self._caption("Header:"))
+        c_row.addWidget(self._table_header_bg_btn)
+        c_row.addWidget(self._caption("Text:"))
+        c_row.addWidget(self._table_header_color_btn)
+        c_row.addWidget(self._caption("Alt Row:"))
+        c_row.addWidget(self._table_alt_row_bg_btn)
+        c_row.addStretch()
+        layout.addLayout(c_row)
+
+        # Subject columns checklist
+        layout.addSpacing(6)
+        layout.addWidget(self._section_lbl("Subject Columns"))
+        layout.addWidget(self._caption("Select columns to include in table:"))
+
+        self._table_cols_container = QWidget()
+        self._table_cols_layout = QVBoxLayout(self._table_cols_container)
+        self._table_cols_layout.setContentsMargins(0, 4, 0, 4)
+        self._table_cols_layout.setSpacing(4)
+
+        self._table_cols_placeholder = QLabel(
+            "Load an Excel dataset to\nsee available subject columns."
+        )
+        self._table_cols_placeholder.setStyleSheet("font-size: 11px; color: #9ca3af; padding: 4px 0;")
+        self._table_cols_layout.addWidget(self._table_cols_placeholder)
+        layout.addWidget(self._table_cols_container)
+
     def _build_geometry_section(self, layout: QVBoxLayout) -> None:
         layout.addSpacing(10)
         layout.addWidget(self._section_lbl("Position & Dimensions"))
@@ -899,6 +1091,83 @@ class PropertiesPanel(QWidget):
 
     def _on_qr_border_cells_changed(self, val: int) -> None:
         self._qr_live(lambda: self.qr_border_cells_changed.emit(val))
+
+    # ── Table helper methods ──────────────────────────────────────────────────
+
+    def _rebuild_table_checkboxes(self, columns: list[str]) -> None:
+        """Recreate table subject column checkboxes from the given column list."""
+        if not hasattr(self, "_table_cols_layout"):
+            return
+
+        for cb in self._table_column_checkboxes.values():
+            self._table_cols_layout.removeWidget(cb)
+            cb.deleteLater()
+        self._table_column_checkboxes.clear()
+
+        if not columns:
+            self._table_cols_placeholder.show()
+            return
+
+        self._table_cols_placeholder.hide()
+
+        selected: set[str] = set()
+        if isinstance(self._item, TableItem):
+            selected = set(self._item.subject_columns)
+
+        for col in columns:
+            cb = QCheckBox(col)
+            cb.setChecked(col in selected)
+            cb.setStyleSheet("font-size: 12px; color: #374151; padding: 1px 0;")
+            cb.toggled.connect(self._on_table_column_toggled)
+            self._table_column_checkboxes[col] = cb
+            self._table_cols_layout.addWidget(cb)
+
+    def _on_table_column_toggled(self, _checked: bool) -> None:
+        selected = [col for col, cb in self._table_column_checkboxes.items() if cb.isChecked()]
+        self._table_live(lambda: self.table_columns_changed.emit(selected))
+
+    def _table_live(self, emit_fn) -> None:
+        if not self._updating and isinstance(self._item, TableItem):
+            emit_fn()
+
+    def _on_table_header_bg_clicked(self) -> None:
+        col = QColorDialog.getColor(QColor(self._table_header_bg_hex), self, "Select Header Background Color")
+        if col.isValid():
+            self._table_header_bg_hex = col.name()
+            self._sync_table_header_bg_btn()
+            self._table_live(lambda: self.table_header_bg_changed.emit(self._table_header_bg_hex))
+
+    def _on_table_header_color_clicked(self) -> None:
+        col = QColorDialog.getColor(QColor(self._table_header_color_hex), self, "Select Header Text Color")
+        if col.isValid():
+            self._table_header_color_hex = col.name()
+            self._sync_table_header_color_btn()
+            self._table_live(lambda: self.table_header_color_changed.emit(self._table_header_color_hex))
+
+    def _on_table_alt_row_bg_clicked(self) -> None:
+        col = QColorDialog.getColor(QColor(self._table_alt_row_bg_hex), self, "Select Alternate Row Color")
+        if col.isValid():
+            self._table_alt_row_bg_hex = col.name()
+            self._sync_table_alt_row_bg_btn()
+            self._table_live(lambda: self.table_alt_row_bg_changed.emit(self._table_alt_row_bg_hex))
+
+    def _sync_table_header_bg_btn(self) -> None:
+        if hasattr(self, "_table_header_bg_btn"):
+            self._table_header_bg_btn.setStyleSheet(
+                f"background-color: {self._table_header_bg_hex}; border: 1px solid #9ca3af; border-radius: 3px;"
+            )
+
+    def _sync_table_header_color_btn(self) -> None:
+        if hasattr(self, "_table_header_color_btn"):
+            self._table_header_color_btn.setStyleSheet(
+                f"background-color: {self._table_header_color_hex}; border: 1px solid #9ca3af; border-radius: 3px;"
+            )
+
+    def _sync_table_alt_row_bg_btn(self) -> None:
+        if hasattr(self, "_table_alt_row_bg_btn"):
+            self._table_alt_row_bg_btn.setStyleSheet(
+                f"background-color: {self._table_alt_row_bg_hex}; border: 1px solid #9ca3af; border-radius: 3px;"
+            )
 
     def _on_color_clicked(self) -> None:
         col = QColorDialog.getColor(QColor(self._color_hex), self, "Select Text Color")

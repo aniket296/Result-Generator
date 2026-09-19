@@ -623,6 +623,219 @@ def _generate_qr_png_bytes(payload: str, box_size: int = 10, border: int = 1) ->
     return buf.getvalue()
 
 
+# ── Dynamic Variable-Row Subject Table Helpers ───────────────────────────────
+
+def _extract_student_subjects(
+    table_spec: dict[str, Any],
+    row_data: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """
+    Extracts subject names and marks for a student from row_data based on table_spec configuration.
+    Returns a list of dicts: [{'subject': str, 'marks': str, 'max_marks': str, 'grade': str}]
+    """
+    from data_engine.academic_engine import calculate_grade
+
+    subject_columns = table_spec.get("subject_columns", [])
+    max_marks = float(table_spec.get("max_marks", 100.0))
+    show_grade = bool(table_spec.get("show_grade", True))
+    show_max_marks = bool(table_spec.get("show_max_marks", True))
+
+    subjects: list[dict[str, Any]] = []
+    headers = list(row_data.keys())
+
+    if subject_columns:
+        for col in subject_columns:
+            val = None
+            if col in row_data:
+                val = row_data[col]
+            else:
+                matched = find_matching_header(col, headers)
+                if matched and matched in row_data:
+                    val = row_data[matched]
+
+            if val is not None:
+                val_str = str(val).strip()
+                if val_str and val_str.lower() not in ("nan", "none", "<na>", "-", "absent", "ab"):
+                    grade_str = ""
+                    if show_grade:
+                        grade_str, _ = calculate_grade(val_str, max_score=max_marks)
+
+                    max_m_str = f"{int(max_marks) if max_marks.is_integer() else max_marks}" if show_max_marks else ""
+                    subjects.append({
+                        "subject": col,
+                        "marks": val_str,
+                        "max_marks": max_m_str,
+                        "grade": grade_str,
+                    })
+    else:
+        # Auto-detect subject columns from row_data
+        excluded_keywords = [
+            "name", "student", "roll", "enroll", "admission", "id", "dob",
+            "birth", "total", "percent", "cgpa", "grade", "rank", "result",
+            "status", "remark", "photo", "qr", "signature", "gender",
+            "class", "section", "division", "session", "year"
+        ]
+        for k, v in row_data.items():
+            k_clean = str(k).strip()
+            k_low = k_clean.lower()
+            if any(kw in k_low for kw in excluded_keywords):
+                continue
+            if v is not None:
+                v_str = str(v).strip()
+                if v_str and v_str.lower() not in ("nan", "none", "<na>", "-", "absent"):
+                    try:
+                        clean_num = re.sub(r'[^\d.]', '', v_str)
+                        if clean_num:
+                            float(clean_num)
+                            grade_str = ""
+                            if show_grade:
+                                grade_str, _ = calculate_grade(v_str, max_score=max_marks)
+                            max_m_str = f"{int(max_marks) if max_marks.is_integer() else max_marks}" if show_max_marks else ""
+                            subjects.append({
+                                "subject": k_clean,
+                                "marks": v_str,
+                                "max_marks": max_m_str,
+                                "grade": grade_str,
+                            })
+                    except (ValueError, TypeError):
+                        pass
+
+    return subjects
+
+
+def _calculate_table_metrics(
+    table_spec: dict[str, Any],
+    subjects: list[dict[str, Any]],
+    scale_x: float,
+    scale_y: float,
+) -> tuple[float, float, float, float, float, float, float]:
+    """
+    Computes table bounding rectangle (x0, y0, w, total_h), header_h, row_h, and delta_h.
+    """
+    x0 = max(0.0, float(table_spec.get("x", 0.0)) * scale_x)
+    y0 = max(0.0, float(table_spec.get("y", 0.0)) * scale_y)
+    w  = max(100.0, float(table_spec.get("width", 400.0)) * scale_x)
+    initial_h = max(40.0, float(table_spec.get("height", 140.0)) * scale_y)
+
+    row_h = max(12.0, float(table_spec.get("row_height", 22.0)) * scale_y)
+    header_h = max(18.0 * scale_y, row_h * 1.1)
+
+    row_count = max(1, len(subjects))
+    total_h = header_h + (row_count * row_h)
+    delta_h = max(0.0, total_h - initial_h)
+
+    return x0, y0, w, total_h, header_h, row_h, delta_h
+
+
+def _render_dynamic_subject_table(
+    page: pymupdf.Page,
+    table_spec: dict[str, Any],
+    subjects: list[dict[str, Any]],
+    scale_x: float,
+    scale_y: float,
+    y_offset: float = 0.0,
+) -> float:
+    """
+    Renders the Dynamic Subject Table directly using PyMuPDF vector drawing primitives
+    (draw_rect, insert_text).
+    """
+    x0, y0, w, total_h, header_h, row_h, _ = _calculate_table_metrics(
+        table_spec, subjects, scale_x, scale_y
+    )
+    y0 += y_offset
+
+    show_max = bool(table_spec.get("show_max_marks", True))
+    show_grade = bool(table_spec.get("show_grade", True))
+    font_size = max(5.0, float(table_spec.get("font_size", 9)) * min(scale_x, scale_y))
+
+    header_bg = _hex_to_rgb_float(table_spec.get("header_bg", "#1e3a8a"))
+    header_fg = _hex_to_rgb_float(table_spec.get("header_color", "#ffffff"))
+    alt_row_bg = _hex_to_rgb_float(table_spec.get("alt_row_bg", "#f8fafc"))
+    border_color = _hex_to_rgb_float(table_spec.get("border_color", "#cbd5e1"))
+    text_color = (0.15, 0.2, 0.25)
+
+    col_titles = ["Subject", "Marks Obtained"]
+    col_keys = ["subject", "marks"]
+    col_shares = [0.55, 0.45]
+
+    if show_max and show_grade:
+        col_titles = ["Subject", "Marks Obtained", "Max Marks", "Grade"]
+        col_keys = ["subject", "marks", "max_marks", "grade"]
+        col_shares = [0.42, 0.20, 0.18, 0.20]
+    elif show_max:
+        col_titles = ["Subject", "Marks Obtained", "Max Marks"]
+        col_keys = ["subject", "marks", "max_marks"]
+        col_shares = [0.50, 0.25, 0.25]
+    elif show_grade:
+        col_titles = ["Subject", "Marks Obtained", "Grade"]
+        col_keys = ["subject", "marks", "grade"]
+        col_shares = [0.50, 0.25, 0.25]
+
+    # 1. Draw Header
+    curr_x = x0
+    for i, (title, share) in enumerate(zip(col_titles, col_shares)):
+        col_w = w * share if i < len(col_titles) - 1 else (x0 + w - curr_x)
+        cell_rect = pymupdf.Rect(curr_x, y0, curr_x + col_w, y0 + header_h)
+
+        page.draw_rect(cell_rect, color=border_color, fill=header_bg, width=0.75)
+
+        text_x = curr_x + 6.0 if i == 0 else max(curr_x + 2.0, curr_x + col_w / 2.0 - len(title) * font_size * 0.28)
+        text_pt = pymupdf.Point(text_x, y0 + header_h * 0.68)
+        page.insert_text(
+            text_pt,
+            title,
+            fontsize=font_size,
+            fontname="helv",
+            color=header_fg,
+        )
+        curr_x += col_w
+
+    # 2. Draw Subject Rows
+    curr_y = y0 + header_h
+
+    if not subjects:
+        empty_rect = pymupdf.Rect(x0, curr_y, x0 + w, curr_y + row_h)
+        page.draw_rect(empty_rect, color=border_color, fill=(1.0, 1.0, 1.0), width=0.5)
+        page.insert_text(
+            pymupdf.Point(x0 + 10.0, curr_y + row_h * 0.65),
+            "No subjects recorded",
+            fontsize=font_size,
+            fontname="helv",
+            color=(0.5, 0.5, 0.5),
+        )
+        return header_h + row_h
+
+    for r_idx, subj in enumerate(subjects):
+        row_fill = alt_row_bg if (r_idx % 2 == 1) else (1.0, 1.0, 1.0)
+        curr_x = x0
+
+        for c_idx, (k, share) in enumerate(zip(col_keys, col_shares)):
+            col_w = w * share if c_idx < len(col_shares) - 1 else (x0 + w - curr_x)
+            cell_rect = pymupdf.Rect(curr_x, curr_y, curr_x + col_w, curr_y + row_h)
+
+            page.draw_rect(cell_rect, color=border_color, fill=row_fill, width=0.5)
+
+            val = str(subj.get(k, "") or "")
+            if c_idx == 0:
+                text_pt = pymupdf.Point(curr_x + 6.0, curr_y + row_h * 0.65)
+            else:
+                text_len_approx = len(val) * font_size * 0.28
+                text_pt = pymupdf.Point(max(curr_x + 2.0, curr_x + col_w / 2.0 - text_len_approx), curr_y + row_h * 0.65)
+
+            page.insert_text(
+                text_pt,
+                val,
+                fontsize=font_size,
+                fontname="helv",
+                color=text_color,
+            )
+            curr_x += col_w
+
+        curr_y += row_h
+
+    return total_h
+
+
 # ── Single PDF Generator ─────────────────────────────────────────────────────
 
 def generate_single_pdf(
@@ -666,6 +879,26 @@ def generate_single_pdf(
     scale_x = page_rect.width / max(1.0, canvas_w)
     scale_y = page_rect.height / max(1.0, canvas_h)
 
+    # ── Compute Dynamic Subject Table metrics & push-down offsets ────────────
+    tables = template_state.get("tables", [])
+    table_render_data: list[tuple[float, float, float, list[dict[str, Any]]]] = []
+
+    for t_spec in tables:
+        subjs = _extract_student_subjects(t_spec, row_data)
+        tx0, ty0, tw, t_tot_h, t_head_h, t_row_h, t_delta_h = _calculate_table_metrics(
+            t_spec, subjs, scale_x, scale_y
+        )
+        t_init_h = max(40.0, float(t_spec.get("height", 140.0)) * scale_y)
+        table_render_data.append((ty0, t_init_h, t_delta_h, subjs))
+
+    def _get_table_push_down(elem_y: float) -> float:
+        """Calculate downward shift for any element positioned below expanding tables."""
+        total_shift = 0.0
+        for (t_y0, t_init_h, d_h, _) in table_render_data:
+            if elem_y >= (t_y0 + t_init_h - 5.0):
+                total_shift += d_h
+        return total_shift
+
     # Stamp fields
     fields = template_state.get("fields", [])
     for f in fields:
@@ -677,6 +910,10 @@ def generate_single_pdf(
         y0 = max(0.0, float(f.get("y", 0.0)) * scale_y)
         w  = max(10.0, float(f.get("width", 100.0)) * scale_x)
         h  = max(10.0, float(f.get("height", 30.0)) * scale_y)
+
+        # Apply dynamic table expansion offset if below an expanding table
+        y0 = min(y0 + _get_table_push_down(y0), max(0.0, page_rect.height - h - 5.0))
+        x0 = min(x0, max(0.0, page_rect.width - 5.0))
 
         # Ensure field is within bounds and not clipped off top/left
         x0 = min(x0, max(0.0, page_rect.width - 5.0))
@@ -784,6 +1021,8 @@ def generate_single_pdf(
         cw          = max(10.0, float(chart_spec.get("width",  300.0)) * scale_x)
         ch          = max(10.0, float(chart_spec.get("height", 200.0)) * scale_y)
 
+        cy0 = min(cy0 + _get_table_push_down(cy0), max(0.0, page_rect.height - ch - 5.0))
+        cx0 = min(cx0, max(0.0, page_rect.width - 5.0))
         chart_rect = pymupdf.Rect(cx0, cy0, cx0 + cw, cy0 + ch)
 
         print(
@@ -812,6 +1051,8 @@ def generate_single_pdf(
         bw  = max(10.0, float(badge_spec.get("width",  100.0)) * scale_x)
         bh  = max(10.0, float(badge_spec.get("height", 100.0)) * scale_y)
 
+        by0 = min(by0 + _get_table_push_down(by0), max(0.0, page_rect.height - bh - 5.0))
+        bx0 = min(bx0, max(0.0, page_rect.width - 5.0))
         badge_rect = pymupdf.Rect(bx0, by0, bx0 + bw, by0 + bh)
 
         is_match = _evaluate_badge_rule(rule_col, rule_op, rule_val, row_data)
@@ -860,6 +1101,9 @@ def generate_single_pdf(
             py0 = max(0.0, float(photo_spec.get("y", 0.0)) * scale_y)
             pw  = max(10.0, float(photo_spec.get("width", 90.0)) * scale_x)
             ph  = max(10.0, float(photo_spec.get("height", 110.0)) * scale_y)
+
+            py0 = min(py0 + _get_table_push_down(py0), max(0.0, page_rect.height - ph - 5.0))
+            px0 = min(px0, max(0.0, page_rect.width - 5.0))
 
             photo_rect = pymupdf.Rect(px0, py0, px0 + pw, py0 + ph)
             photo_file = find_student_photo_path(effective_photo_dir, id_val)
@@ -913,6 +1157,9 @@ def generate_single_pdf(
         qw  = max(10.0, float(qr_spec.get("width", 80.0)) * scale_x)
         qh  = max(10.0, float(qr_spec.get("height", 80.0)) * scale_y)
 
+        qy0 = min(qy0 + _get_table_push_down(qy0), max(0.0, page_rect.height - qh - 5.0))
+        qx0 = min(qx0, max(0.0, page_rect.width - 5.0))
+
         qr_rect = pymupdf.Rect(qx0, qy0, qx0 + qw, qy0 + qh)
         interpolated_payload = _interpolate_qr_payload(payload_template, row_data)
 
@@ -932,6 +1179,17 @@ def generate_single_pdf(
                 print(f"[DEBUG QR] Cannot render '{label}': qrcode library not available")
             elif not interpolated_payload:
                 print(f"[DEBUG QR] Empty payload for '{label}', skipping")
+
+    # ── Render Dynamic Variable-Row Subject Tables ────────────────────────────
+    for idx, t_spec in enumerate(tables):
+        if idx < len(table_render_data):
+            ty0, _, _, subjs = table_render_data[idx]
+        else:
+            subjs = _extract_student_subjects(t_spec, row_data)
+            ty0 = max(0.0, float(t_spec.get("y", 0.0)) * scale_y)
+
+        t_shift = _get_table_push_down(ty0)
+        _render_dynamic_subject_table(page, t_spec, subjs, scale_x, scale_y, y_offset=t_shift)
 
     # Stamp internal template identity in metadata
     doc.set_metadata({
