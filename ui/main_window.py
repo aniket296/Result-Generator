@@ -210,7 +210,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No Data", "Please load a student dataset first.")
             return
 
-        dlg = PrintOneDialog(template_state, headers, rows, self)
+        photo_dir = self._dashboard_view.get_photo_dir()
+        dlg = PrintOneDialog(template_state, headers, rows, self, photo_dir=photo_dir)
         dlg.exec()
 
     def _on_print_all(self) -> None:
@@ -232,7 +233,8 @@ class MainWindow(QMainWindow):
             QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
-            printed, failed = print_all_student_records(template_state, rows, self)
+            photo_dir = self._dashboard_view.get_photo_dir()
+            printed, failed = print_all_student_records(template_state, rows, self, photo_dir=photo_dir)
             QMessageBox.information(
                 self,
                 "Printing Finished",

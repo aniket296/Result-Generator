@@ -1,4 +1,4 @@
-﻿"""
+"""
 generation/printer.py
 Hardware and Document Printing Subsystem for Teacher Result Management System.
 
@@ -26,6 +26,7 @@ def print_single_student_record(
     template_state: dict[str, Any],
     row_data: dict[str, str],
     parent_widget: QWidget | None = None,
+    photo_dir: str = "",
 ) -> bool:
     """
     Renders a single student result to a temporary PDF and prints it via QPrintDialog.
@@ -40,7 +41,7 @@ def print_single_student_record(
 
     temp_pdf = os.path.join(tempfile.gettempdir(), "temp_print_result.pdf")
     try:
-        generate_single_pdf(template_state, row_data, temp_pdf)
+        generate_single_pdf(template_state, row_data, temp_pdf, photo_dir=photo_dir)
 
         doc = pymupdf.open(temp_pdf)
         try:
@@ -94,6 +95,7 @@ def print_all_student_records(
     template_state: dict[str, Any],
     rows: list[dict[str, str]],
     parent_widget: QWidget | None = None,
+    photo_dir: str = "",
 ) -> tuple[int, int]:
     """
     Batch prints all student records to the printer.
@@ -120,7 +122,7 @@ def print_all_student_records(
     try:
         for idx, row in enumerate(rows):
             try:
-                generate_single_pdf(template_state, row, temp_pdf)
+                generate_single_pdf(template_state, row, temp_pdf, photo_dir=photo_dir)
                 doc = pymupdf.open(temp_pdf)
                 try:
                     if len(doc) > 0:

@@ -38,11 +38,13 @@ class PrintOneDialog(QDialog):
         headers: list[str],
         rows: list[dict[str, str]],
         parent=None,
+        photo_dir: str = "",
     ) -> None:
         super().__init__(parent)
         self.template_state = template_state
         self.headers = headers
         self.rows = rows
+        self.photo_dir = photo_dir
         self._matched_row: dict[str, str] | None = None
 
         self.setWindowTitle("Print Individual Student Result")
@@ -244,7 +246,7 @@ class PrintOneDialog(QDialog):
         )
         if save_path:
             try:
-                generate_single_pdf(self.template_state, self._matched_row, save_path)
+                generate_single_pdf(self.template_state, self._matched_row, save_path, photo_dir=self.photo_dir)
                 QMessageBox.information(
                     self,
                     "Saved Successfully",
@@ -257,4 +259,4 @@ class PrintOneDialog(QDialog):
         if not self._matched_row:
             return
 
-        print_single_student_record(self.template_state, self._matched_row, self)
+        print_single_student_record(self.template_state, self._matched_row, self, photo_dir=self.photo_dir)
