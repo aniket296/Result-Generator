@@ -1,0 +1,125 @@
+{
+  "version": "1.0",
+  "template_id": "preset-idcard-003",
+  "template_name": "Student Identity Card",
+  "num_pages": 1,
+  "canvas_width": 242.0,
+  "canvas_height": 153.0,
+  "background": {
+    "type": "pdf",
+    "path": "D:\\projects\\Result Generator\\assets\\presets\\student_id_card_bg.pdf"
+  },
+  "background_page2": {
+    "type": "",
+    "path": ""
+  },
+  "backgrounds": [
+    {
+      "type": "pdf",
+      "path": "D:\\projects\\Result Generator\\assets\\presets\\student_id_card_bg.pdf"
+    }
+  ],
+  "fields": [
+    {
+      "label": "Student Name",
+      "mapped_column": "Student Name",
+      "page": 1,
+      "x": 108,
+      "y": 41,
+      "width": 75,
+      "height": 12,
+      "font_size": 7.5,
+      "bold": true,
+      "color": "#1e293b",
+      "auto_shrink": true
+    },
+    {
+      "label": "Roll No",
+      "mapped_column": "Roll No",
+      "page": 1,
+      "x": 108,
+      "y": 55,
+      "width": 75,
+      "height": 11,
+      "font_size": 6.5,
+      "bold": false,
+      "color": "#1e293b"
+    },
+    {
+      "label": "Class",
+      "mapped_column": "Class",
+      "page": 1,
+      "x": 108,
+      "y": 69,
+      "width": 75,
+      "height": 11,
+      "font_size": 6.5,
+      "bold": false,
+      "color": "#1e293b"
+    },
+    {
+      "label": "Date of Birth",
+      "mapped_column": "Date of Birth",
+      "page": 1,
+      "x": 108,
+      "y": 83,
+      "width": 75,
+      "height": 11,
+      "font_size": 6.5,
+      "bold": false,
+      "color": "#1e293b"
+    },
+    {
+      "label": "Blood Group",
+      "mapped_column": "Blood Group",
+      "page": 1,
+      "x": 108,
+      "y": 97,
+      "width": 75,
+      "height": 11,
+      "font_size": 6.5,
+      "bold": false,
+      "color": "#1e293b"
+    },
+    {
+      "label": "Emergency Phone",
+      "mapped_column": "Phone",
+      "page": 1,
+      "x": 108,
+      "y": 111,
+      "width": 75,
+      "height": 11,
+      "font_size": 6.5,
+      "bold": true,
+      "color": "#b91c1c"
+    }
+  ],
+  "tables": [],
+  "photos": [
+    {
+      "item_type": "photo",
+      "label": "Student Photo",
+      "page": 1,
+      "x": 11.0,
+      "y": 39.0,
+      "width": 50.0,
+      "height": 64.0,
+      "shape": "rect"
+    }
+  ],
+  "qrs": [
+    {
+      "item_type": "qr",
+      "label": "ID Verification QR",
+      "page": 1,
+      "x": 188.0,
+      "y": 44.0,
+      "width": 42.0,
+      "height": 42.0,
+      "qr_type": "summary",
+      "error_correction": "M"
+    }
+  ],
+  "badges": [],
+  "charts": []
+}

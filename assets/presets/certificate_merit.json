@@ -1,0 +1,122 @@
+{
+  "version": "1.0",
+  "template_id": "preset-certificate-002",
+  "template_name": "Certificate of Merit",
+  "num_pages": 1,
+  "canvas_width": 842.0,
+  "canvas_height": 595.0,
+  "background": {
+    "type": "pdf",
+    "path": "D:\\projects\\Result Generator\\assets\\presets\\certificate_merit_bg.pdf"
+  },
+  "background_page2": {
+    "type": "",
+    "path": ""
+  },
+  "backgrounds": [
+    {
+      "type": "pdf",
+      "path": "D:\\projects\\Result Generator\\assets\\presets\\certificate_merit_bg.pdf"
+    }
+  ],
+  "fields": [
+    {
+      "label": "Student Name",
+      "mapped_column": "Student Name",
+      "page": 1,
+      "x": 171.0,
+      "y": 222.0,
+      "width": 500.0,
+      "height": 42.0,
+      "font_size": 26.0,
+      "bold": true,
+      "color": "#1e3a8a",
+      "alignment": "center"
+    },
+    {
+      "label": "Achievement Details",
+      "mapped_column": "Achievement",
+      "page": 1,
+      "x": 180.0,
+      "y": 350.0,
+      "width": 482.0,
+      "height": 30.0,
+      "font_size": 12.0,
+      "bold": true,
+      "color": "#b45309",
+      "alignment": "center",
+      "auto_shrink": true
+    },
+    {
+      "label": "Class & Section",
+      "mapped_column": "Class",
+      "page": 1,
+      "x": 230.0,
+      "y": 395.0,
+      "width": 160.0,
+      "height": 20.0,
+      "font_size": 10.0,
+      "bold": false,
+      "color": "#475569",
+      "alignment": "center"
+    },
+    {
+      "label": "Academic Year",
+      "mapped_column": "Academic Year",
+      "page": 1,
+      "x": 450.0,
+      "y": 395.0,
+      "width": 160.0,
+      "height": 20.0,
+      "font_size": 10.0,
+      "bold": false,
+      "color": "#475569",
+      "alignment": "center"
+    },
+    {
+      "label": "Issue Date",
+      "mapped_column": "Date",
+      "page": 1,
+      "x": 371.0,
+      "y": 440.0,
+      "width": 100.0,
+      "height": 18.0,
+      "font_size": 9.0,
+      "bold": false,
+      "color": "#64748b",
+      "alignment": "center"
+    }
+  ],
+  "tables": [],
+  "photos": [],
+  "qrs": [
+    {
+      "item_type": "qr",
+      "label": "Verification QR",
+      "page": 1,
+      "x": 396.0,
+      "y": 472.0,
+      "width": 50.0,
+      "height": 50.0,
+      "qr_type": "tamper_proof",
+      "error_correction": "M"
+    }
+  ],
+  "badges": [
+    {
+      "item_type": "badge",
+      "label": "Merit Badge",
+      "page": 1,
+      "x": 92.0,
+      "y": 455.0,
+      "width": 66.0,
+      "height": 66.0,
+      "condition_column": "Calculated_Grade",
+      "condition_value": "A1",
+      "badge_text": "HONOR ROLL",
+      "bg_color": "#fef3c7",
+      "text_color": "#b45309"
+    }
+  ],
+  "charts": []
+}

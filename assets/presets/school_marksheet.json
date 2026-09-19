@@ -1,0 +1,257 @@
+{
+  "version": "1.0",
+  "template_id": "preset-marksheet-001",
+  "template_name": "Standard School Marksheet",
+  "num_pages": 1,
+  "canvas_width": 595.0,
+  "canvas_height": 842.0,
+  "background": {
+    "type": "pdf",
+    "path": "D:\\projects\\Result Generator\\assets\\presets\\school_marksheet_bg.pdf"
+  },
+  "background_page2": {
+    "type": "",
+    "path": ""
+  },
+  "backgrounds": [
+    {
+      "type": "pdf",
+      "path": "D:\\projects\\Result Generator\\assets\\presets\\school_marksheet_bg.pdf"
+    }
+  ],
+  "fields": [
+    {
+      "label": "Student Name",
+      "mapped_column": "Student Name",
+      "page": 1,
+      "x": 105,
+      "y": 145,
+      "width": 140,
+      "height": 16,
+      "font_size": 9.5,
+      "bold": true,
+      "color": "#1e293b"
+    },
+    {
+      "label": "Roll No",
+      "mapped_column": "Roll No",
+      "page": 1,
+      "x": 105,
+      "y": 161,
+      "width": 140,
+      "height": 16,
+      "font_size": 9.0,
+      "bold": false,
+      "color": "#1e293b"
+    },
+    {
+      "label": "Class",
+      "mapped_column": "Class",
+      "page": 1,
+      "x": 105,
+      "y": 177,
+      "width": 140,
+      "height": 16,
+      "font_size": 9.0,
+      "bold": false,
+      "color": "#1e293b"
+    },
+    {
+      "label": "Date of Birth",
+      "mapped_column": "Date of Birth",
+      "page": 1,
+      "x": 105,
+      "y": 193,
+      "width": 140,
+      "height": 16,
+      "font_size": 9.0,
+      "bold": false,
+      "color": "#1e293b"
+    },
+    {
+      "label": "Father Name",
+      "mapped_column": "Father Name",
+      "page": 1,
+      "x": 335,
+      "y": 145,
+      "width": 140,
+      "height": 16,
+      "font_size": 9.0,
+      "bold": false,
+      "color": "#1e293b"
+    },
+    {
+      "label": "Mother Name",
+      "mapped_column": "Mother Name",
+      "page": 1,
+      "x": 335,
+      "y": 161,
+      "width": 140,
+      "height": 16,
+      "font_size": 9.0,
+      "bold": false,
+      "color": "#1e293b"
+    },
+    {
+      "label": "Enrollment",
+      "mapped_column": "Enrollment number",
+      "page": 1,
+      "x": 335,
+      "y": 177,
+      "width": 140,
+      "height": 16,
+      "font_size": 9.0,
+      "bold": false,
+      "color": "#1e293b"
+    },
+    {
+      "label": "Attendance",
+      "mapped_column": "Attendance",
+      "page": 1,
+      "x": 335,
+      "y": 193,
+      "width": 140,
+      "height": 16,
+      "font_size": 9.0,
+      "bold": false,
+      "color": "#1e293b"
+    },
+    {
+      "label": "Total Marks",
+      "mapped_column": "Total Marks",
+      "page": 1,
+      "x": 145,
+      "y": 618,
+      "width": 95,
+      "height": 16,
+      "font_size": 9.5,
+      "bold": true,
+      "color": "#0f172a"
+    },
+    {
+      "label": "Percentage",
+      "mapped_column": "Percentage",
+      "page": 1,
+      "x": 145,
+      "y": 636,
+      "width": 95,
+      "height": 16,
+      "font_size": 9.5,
+      "bold": true,
+      "color": "#0f172a"
+    },
+    {
+      "label": "Calculated Grade",
+      "mapped_column": "Calculated_Grade",
+      "page": 1,
+      "x": 145,
+      "y": 654,
+      "width": 95,
+      "height": 16,
+      "font_size": 10.0,
+      "bold": true,
+      "color": "#1e3a8a"
+    },
+    {
+      "label": "Class Rank",
+      "mapped_column": "Class_Rank",
+      "page": 1,
+      "x": 365,
+      "y": 618,
+      "width": 180,
+      "height": 16,
+      "font_size": 9.5,
+      "bold": true,
+      "color": "#0f172a"
+    },
+    {
+      "label": "Result Status",
+      "mapped_column": "Result_Status",
+      "page": 1,
+      "x": 365,
+      "y": 636,
+      "width": 180,
+      "height": 16,
+      "font_size": 9.5,
+      "bold": true,
+      "color": "#047857"
+    },
+    {
+      "label": "Teacher Remarks",
+      "mapped_column": "Teacher_Remarks",
+      "page": 1,
+      "x": 365,
+      "y": 654,
+      "width": 180,
+      "height": 18,
+      "font_size": 8.5,
+      "bold": false,
+      "color": "#334155",
+      "auto_shrink": true
+    }
+  ],
+  "tables": [
+    {
+      "item_type": "table",
+      "label": "Scholastic Subjects Table",
+      "page": 1,
+      "x": 30.0,
+      "y": 248.0,
+      "width": 535.0,
+      "height": 330.0,
+      "columns": [
+        "Subject",
+        "Max Marks",
+        "Marks Obtained",
+        "Grade"
+      ],
+      "header_bg": "#1e3a8a",
+      "header_color": "#ffffff",
+      "row_alt_bg": "#f8fafc",
+      "border_color": "#cbd5e1",
+      "font_size": 9.0
+    }
+  ],
+  "photos": [
+    {
+      "item_type": "photo",
+      "label": "Student Photo",
+      "page": 1,
+      "x": 487.0,
+      "y": 132.0,
+      "width": 66.0,
+      "height": 74.0,
+      "shape": "rect"
+    }
+  ],
+  "qrs": [
+    {
+      "item_type": "qr",
+      "label": "Verification QR",
+      "page": 1,
+      "x": 37.0,
+      "y": 732.0,
+      "width": 56.0,
+      "height": 56.0,
+      "qr_type": "summary",
+      "error_correction": "M"
+    }
+  ],
+  "badges": [
+    {
+      "item_type": "badge",
+      "label": "Result Badge",
+      "page": 1,
+      "x": 480.0,
+      "y": 616.0,
+      "width": 75.0,
+      "height": 28.0,
+      "condition_column": "Result_Status",
+      "condition_value": "PASSED",
+      "badge_text": "PASSED",
+      "bg_color": "#d1fae5",
+      "text_color": "#065f46"
+    }
+  ],
+  "charts": []
+}

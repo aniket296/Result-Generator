@@ -11,6 +11,7 @@ APP_DATA_DIR = os.path.join(os.environ.get("APPDATA", ""), "TeacherResultSoftwar
 TEMPLATES_DIR = os.path.join(APP_DATA_DIR, "templates")
 DATASETS_DIR = os.path.join(APP_DATA_DIR, "datasets")
 RECOVERY_DIR = os.path.join(APP_DATA_DIR, "recovery")
+PRESETS_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "presets"))
 DEFAULT_NAMING_PATTERN = "[Enrollment number]_[Name].pdf"
 
 # Ensure required storage directories exist

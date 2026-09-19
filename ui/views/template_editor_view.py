@@ -48,6 +48,7 @@ from ui.undo_commands import (
     MoveMultipleItemsCommand,
     ResizeItemCommand,
 )
+from ui.dialogs.preset_dialog import TemplatePresetDialog
 from ui.widgets.badge_item import BadgeItem
 from ui.widgets.chart_item import ChartItem
 from ui.widgets.field_item import FieldItem
@@ -55,7 +56,7 @@ from ui.widgets.photo_item import PhotoItem
 from ui.widgets.qr_item import QRItem
 from ui.widgets.table_item import TableItem
 from ui.widgets.properties_panel import PropertiesPanel
-from utils.constants import TEMPLATES_DIR
+from utils.constants import TEMPLATES_DIR, PRESETS_DIR
 
 
 class _CanvasView(QGraphicsView):
@@ -261,6 +262,19 @@ class TemplateEditorView(QWidget):
         row1.addSpacing(8)
 
         # Action Buttons
+        self._presets_btn     = self._tool_btn("🎨  Template Presets",        self._on_open_presets)
+        self._presets_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        self._presets_btn.setToolTip("Open built-in production template preset library (Marksheet, Certificate, ID Card)")
+        self._presets_btn.setStyleSheet("""
+            QPushButton {
+                background: #fdf2f8; color: #9d174d; border: 1px solid #fbcfe8;
+                border-radius: 4px; padding: 4px 10px; font-size: 12px; font-weight: 600;
+                min-height: 20px;
+            }
+            QPushButton:hover { background: #fce7f3; }
+            QPushButton:disabled { background: #f9fafb; color: #9ca3af; border-color: #e5e7eb; }
+        """)
+
         self._bg_btn          = self._tool_btn("🖼  Upload Background",      self._on_upload_bg)
         self._add_btn         = self._tool_btn("➕  Add Field",               self._on_add_field)
         self._add_chart_btn   = self._tool_btn("📊  Add Chart",               self._on_add_chart)
@@ -334,6 +348,7 @@ class TemplateEditorView(QWidget):
         self._save_btn        = self._tool_btn("💾  Save Template",           self._on_save_template)
         self._load_btn        = self._tool_btn("📂  Open Template",           self._on_load_template)
 
+        row1.addWidget(self._presets_btn)
         row1.addWidget(self._bg_btn)
         row1.addWidget(self._add_btn)
         row1.addWidget(self._add_chart_btn)
@@ -562,6 +577,8 @@ class TemplateEditorView(QWidget):
         self._add_qr_btn.setEnabled(not locked)
         self._add_table_btn.setEnabled(not locked)
         self._bg_btn.setEnabled(not locked)
+        if hasattr(self, "_presets_btn"):
+            self._presets_btn.setEnabled(not locked)
         if locked:
             self._lock_badge.setText(f"🔒 {reason or 'Template Locked (Dataset Active)'}")
             self._lock_badge.show()
@@ -1104,6 +1121,43 @@ class TemplateEditorView(QWidget):
             except Exception as exc:
                 QMessageBox.critical(self, "Load Error", f"Failed to load template:\n{exc}")
 
+    def _on_open_presets(self) -> None:
+        if self._is_locked:
+            QMessageBox.warning(
+                self,
+                "Template Locked",
+                "Cannot load template presets while a dataset is active.\n"
+                "Please clear or unload the dataset first.",
+            )
+            return
+
+        if self._has_unsaved_changes:
+            reply = QMessageBox.question(
+                self,
+                "Confirm Preset Selection",
+                "Loading a template preset will replace the current canvas layout.\n\n"
+                "Do you want to proceed and replace the current template?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+        dlg = TemplatePresetDialog(self)
+        if dlg.exec() == TemplatePresetDialog.DialogCode.Accepted and dlg.selected_preset_state:
+            state = dlg.selected_preset_state
+            self._restore_state(state)
+            self._has_unsaved_changes = True
+            self._undo_stack.clear()
+            self._template_name = state.get("template_name", "Template")
+            self._fit_to_view()
+            QMessageBox.information(
+                self,
+                "Template Preset Loaded",
+                f"Successfully loaded '{self._template_name}' preset!\n\n"
+                "You can customize field tags, fonts, tables, or replace the background anytime.",
+            )
+
     def get_state(self) -> dict:
         return self._get_state()
 
@@ -1191,6 +1245,11 @@ class TemplateEditorView(QWidget):
         # Background Page 1
         bg      = d.get("background", {})
         bg_path = bg.get("path", "")
+        if bg_path and not os.path.exists(bg_path):
+            cand = os.path.join(PRESETS_DIR, os.path.basename(bg_path))
+            if os.path.exists(cand):
+                bg_path = cand
+                bg["path"] = cand
         if bg_path and os.path.exists(bg_path):
             self._load_background_file(bg_path)
         else:
