@@ -42,6 +42,14 @@ try:
 except ImportError:
     _MATPLOTLIB_AVAILABLE = False
 
+# ── Optional qrcode library for offline QR generation ────────────────────────
+try:
+    import qrcode
+    from qrcode.image.pil import PilImage as _QrPilImage
+    _QRCODE_AVAILABLE = True
+except ImportError:
+    _QRCODE_AVAILABLE = False
+
 
 # ── Filename & Path Helpers ───────────────────────────────────────────────────
 
@@ -565,6 +573,56 @@ def find_student_photo_path(photo_dir: str, id_val: str) -> str | None:
     return None
 
 
+def _interpolate_qr_payload(template: str, row_data: dict[str, str]) -> str:
+    """
+    Replaces bracketed column tokens like [Name], [Roll No], [Total]
+    with the student's corresponding value from row_data.
+    Supports normalized/aliased header lookup.
+    """
+    if not template:
+        return ""
+
+    headers = list(row_data.keys())
+
+    def replacer(match: re.Match) -> str:
+        token = match.group(1).strip()
+        # 1. Direct match
+        if token in row_data:
+            val = row_data[token]
+            return "" if val is None else str(val)
+        # 2. Aliased / fuzzy match
+        matched = find_matching_header(token, headers)
+        if matched and matched in row_data:
+            val = row_data[matched]
+            return "" if val is None else str(val)
+        # Fallback: keep original token
+        return match.group(0)
+
+    return re.sub(r"\[(.*?)\]", replacer, template)
+
+
+def _generate_qr_png_bytes(payload: str, box_size: int = 10, border: int = 1) -> bytes:
+    """
+    Generate monochrome PNG bytes for a QR code from payload string using offline qrcode library.
+    """
+    if not _QRCODE_AVAILABLE:
+        raise RuntimeError("qrcode library is not installed or available.")
+
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=max(1, int(box_size)),
+        border=max(0, int(border)),
+    )
+    qr.add_data(payload)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
 # ── Single PDF Generator ─────────────────────────────────────────────────────
 
 def generate_single_pdf(
@@ -842,6 +900,38 @@ def generate_single_pdf(
                     )
                 except Exception as p_err:
                     print(f"[DEBUG PHOTO] Placeholder drawing error for '{label}': {p_err}")
+
+    # ── Render QR codes ───────────────────────────────────────────────────────
+    qrs = template_state.get("qr_codes") or template_state.get("qrs") or []
+    for qr_spec in qrs:
+        label = qr_spec.get("label", "QR Code")
+        payload_template = qr_spec.get("qr_payload_template") or qr_spec.get("qr_payload", "")
+        border_cells = int(qr_spec.get("border_cells", 1))
+
+        qx0 = max(0.0, float(qr_spec.get("x", 0.0)) * scale_x)
+        qy0 = max(0.0, float(qr_spec.get("y", 0.0)) * scale_y)
+        qw  = max(10.0, float(qr_spec.get("width", 80.0)) * scale_x)
+        qh  = max(10.0, float(qr_spec.get("height", 80.0)) * scale_y)
+
+        qr_rect = pymupdf.Rect(qx0, qy0, qx0 + qw, qy0 + qh)
+        interpolated_payload = _interpolate_qr_payload(payload_template, row_data)
+
+        print(
+            f"[DEBUG QR] '{label}' | Payload: '{interpolated_payload}' "
+            f"| Pos: ({qx0:.1f}, {qy0:.1f}) | Dim: ({qw:.1f}×{qh:.1f})"
+        )
+
+        if interpolated_payload and _QRCODE_AVAILABLE:
+            try:
+                png_bytes = _generate_qr_png_bytes(interpolated_payload, box_size=10, border=border_cells)
+                page.insert_image(qr_rect, stream=png_bytes, keep_proportion=True)
+            except Exception as qr_err:
+                print(f"[DEBUG QR] Error generating/inserting QR code '{label}': {qr_err}")
+        else:
+            if not _QRCODE_AVAILABLE:
+                print(f"[DEBUG QR] Cannot render '{label}': qrcode library not available")
+            elif not interpolated_payload:
+                print(f"[DEBUG QR] Empty payload for '{label}', skipping")
 
     # Stamp internal template identity in metadata
     doc.set_metadata({

@@ -33,6 +33,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSpinBox,
@@ -45,6 +46,7 @@ from ui.widgets.badge_item import BadgeItem
 from ui.widgets.chart_item import ChartItem
 from ui.widgets.field_item import FieldItem
 from ui.widgets.photo_item import PhotoItem
+from ui.widgets.qr_item import QRItem
 
 
 class PropertiesPanel(QWidget):
@@ -84,6 +86,10 @@ class PropertiesPanel(QWidget):
     photo_border_color_changed = pyqtSignal(str)
     photo_border_width_changed = pyqtSignal(float)
     photo_corner_radius_changed = pyqtSignal(float)
+
+    # ── Signals (QRItem) ─────────────────────────────────────────────────────
+    qr_payload_changed     = pyqtSignal(str)
+    qr_border_cells_changed = pyqtSignal(int)
 
     _NO_COL = "-- None (use Label) --"
     _AUTO_ID_COL = "-- Auto (Enrollment/Unique) --"
@@ -142,8 +148,8 @@ class PropertiesPanel(QWidget):
         self._photo_id_combo.setCurrentIndex(max(0, idx3))
         self._photo_id_combo.blockSignals(False)
 
-    def load_item(self, item: FieldItem | ChartItem | BadgeItem | PhotoItem | None) -> None:
-        """Bind to the currently selected item (FieldItem, ChartItem, BadgeItem, or PhotoItem), or show empty state."""
+    def load_item(self, item: FieldItem | ChartItem | BadgeItem | PhotoItem | QRItem | None) -> None:
+        """Bind to the currently selected item, or show empty state."""
         self._item = item
         if item is None:
             self._scroll.hide()
@@ -167,6 +173,7 @@ class PropertiesPanel(QWidget):
                 self._field_container.hide()
                 self._badge_container.hide()
                 self._photo_container.hide()
+                self._qr_container.hide()
                 self._chart_container.show()
                 self._panel_title.setText("Chart Properties")
 
@@ -185,6 +192,7 @@ class PropertiesPanel(QWidget):
                 self._field_container.hide()
                 self._chart_container.hide()
                 self._photo_container.hide()
+                self._qr_container.hide()
                 self._badge_container.show()
                 self._panel_title.setText("Badge Properties")
 
@@ -217,6 +225,7 @@ class PropertiesPanel(QWidget):
                 self._field_container.hide()
                 self._chart_container.hide()
                 self._badge_container.hide()
+                self._qr_container.hide()
                 self._photo_container.show()
                 self._panel_title.setText("Photo Properties")
 
@@ -232,10 +241,31 @@ class PropertiesPanel(QWidget):
                 self._photo_border_width_spin.setValue(int(item.border_width))
                 self._photo_radius_spin.setValue(int(item.corner_radius))
 
+            elif isinstance(item, QRItem):
+                # ── QR Code mode ──
+                self._field_container.hide()
+                self._chart_container.hide()
+                self._badge_container.hide()
+                self._photo_container.hide()
+                self._qr_container.show()
+                self._panel_title.setText("QR Code Properties")
+
+                # Payload
+                self._qr_payload_edit.blockSignals(True)
+                self._qr_payload_edit.setPlainText(item.qr_payload)
+                self._qr_payload_edit.blockSignals(False)
+
+                # Border cells
+                self._qr_border_spin.blockSignals(True)
+                self._qr_border_spin.setValue(item.border_cells)
+                self._qr_border_spin.blockSignals(False)
+
             else:
                 # ── Field mode ──
                 self._chart_container.hide()
                 self._badge_container.hide()
+                self._photo_container.hide()
+                self._qr_container.hide()
                 self._field_container.show()
                 self._panel_title.setText("Field Properties")
 
@@ -358,6 +388,15 @@ class PropertiesPanel(QWidget):
         self._build_photo_section(pc_layout)
         self._form.addWidget(self._photo_container)
         self._photo_container.hide()
+
+        # ── QR-specific container ────────────────────────────────────────
+        self._qr_container = QWidget()
+        qc_layout = QVBoxLayout(self._qr_container)
+        qc_layout.setContentsMargins(0, 0, 0, 0)
+        qc_layout.setSpacing(8)
+        self._build_qr_section(qc_layout)
+        self._form.addWidget(self._qr_container)
+        self._qr_container.hide()
 
         # ── Shared sections ──────────────────────────────────────────────
         self._build_geometry_section(self._form)
@@ -655,6 +694,41 @@ class PropertiesPanel(QWidget):
         b_row.addWidget(self._photo_radius_spin, stretch=1)
         layout.addLayout(b_row)
 
+    def _build_qr_section(self, layout: QVBoxLayout) -> None:
+        """Build QR code configuration controls."""
+        layout.addWidget(self._section_lbl("QR Code Payload"))
+
+        desc = QLabel(
+            "Use [Column Name] tokens to embed student data.\n"
+            "Example: ID:[Enrollment number] | Name:[Name]"
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet("font-size: 11px; color: #64748b; font-style: italic;")
+        layout.addWidget(desc)
+
+        self._qr_payload_edit = QPlainTextEdit()
+        self._qr_payload_edit.setFixedHeight(90)
+        self._qr_payload_edit.setStyleSheet(
+            "border: 1px solid #d1d5db; border-radius: 4px; "
+            "padding: 4px; font-size: 11px; color: #111827; background: white;"
+        )
+        self._qr_payload_edit.textChanged.connect(self._on_qr_payload_changed)
+        layout.addWidget(self._qr_payload_edit)
+
+        layout.addSpacing(6)
+        layout.addWidget(self._section_lbl("Border / Margin"))
+
+        bc_row = QHBoxLayout()
+        bc_row.setSpacing(6)
+        bc_row.addWidget(self._caption("QR margin cells:"))
+        self._qr_border_spin = QSpinBox()
+        self._qr_border_spin.setRange(0, 10)
+        self._qr_border_spin.setValue(1)
+        self._qr_border_spin.setStyleSheet(self._INPUT)
+        self._qr_border_spin.valueChanged.connect(self._on_qr_border_cells_changed)
+        bc_row.addWidget(self._qr_border_spin, stretch=1)
+        layout.addLayout(bc_row)
+
     def _build_geometry_section(self, layout: QVBoxLayout) -> None:
         layout.addSpacing(10)
         layout.addWidget(self._section_lbl("Position & Dimensions"))
@@ -812,6 +886,19 @@ class PropertiesPanel(QWidget):
 
     def _on_photo_radius_changed(self, val: int) -> None:
         self._photo_live(lambda: self.photo_corner_radius_changed.emit(float(val)))
+
+    def _qr_live(self, emit_fn) -> None:
+        """Emit signal only when not updating and a QRItem is selected."""
+        if not self._updating and isinstance(self._item, QRItem):
+            emit_fn()
+
+    def _on_qr_payload_changed(self) -> None:
+        if hasattr(self, "_qr_payload_edit"):
+            text = self._qr_payload_edit.toPlainText()
+            self._qr_live(lambda: self.qr_payload_changed.emit(text))
+
+    def _on_qr_border_cells_changed(self, val: int) -> None:
+        self._qr_live(lambda: self.qr_border_cells_changed.emit(val))
 
     def _on_color_clicked(self) -> None:
         col = QColorDialog.getColor(QColor(self._color_hex), self, "Select Text Color")
