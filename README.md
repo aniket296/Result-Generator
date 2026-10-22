@@ -140,3 +140,4 @@ python installer/build_installer.py
 ## 📄 License
 
 This project is licensed under the **MIT License**. Free for educational, institutional, and commercial use with attribution.
+
